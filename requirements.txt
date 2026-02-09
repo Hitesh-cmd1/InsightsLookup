@@ -1,0 +1,4 @@
+requests
+pdfquery
+pandas
+openpyxl
