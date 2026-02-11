@@ -1,6 +1,6 @@
 
 from pdfquery import PDFQuery
-from save import save
+from pipeline.save import save
 
 
 
@@ -13,7 +13,7 @@ def format_text(file_name):
     education = False
     experience_list = []
     education_list = []
-    edu = [None,None]
+    edu = [None,""]
     exp = [None, None, None,None]
     name = list(list(pages[0])[0])[0].text
     for t in pages:
@@ -52,11 +52,16 @@ def format_text(file_name):
                                 is_address = True
             elif education:
                 if element.tag == 'LTTextLineHorizontal' and len(list(element))==1 and element[0].tag == 'LTTextBoxHorizontal':
+                    if "(" in edu[1] and ")" in edu[1]:
+                        education_list.append(edu)
+                        edu = [None,""]
                     if element.get("height") == '12.0':
                         edu[0] = element[0].text.strip()
                     elif element.get("height") == '10.5':
-                        edu[1] = element[0].text.strip()
-                        education_list.append(edu)
-                        edu = [None,None]
+                        if not ("Page" in element.text and "of" in element.text):
+                            edu[1] = edu[1] + " " +element[0].text.strip()
+                            
     save(name, experience_list, education_list)
     
+if __name__ == "__main__":
+    format_text("../link/ACoAADeOCIMBYsRFYDPUDngwP-7w3e1dbjMPp5c.pdf")
