@@ -86,7 +86,7 @@ webpackConfig.devServer = (devServerConfig) => {
   // Add health check endpoints if enabled
   if (config.enableHealthCheck && setupHealthEndpoints && healthPluginInstance) {
     const originalSetupMiddlewares = devServerConfig.setupMiddlewares;
-
+    devServerConfig
     devServerConfig.setupMiddlewares = (middlewares, devServer) => {
       // Call original setup if exists
       if (originalSetupMiddlewares) {
@@ -99,7 +99,7 @@ webpackConfig.devServer = (devServerConfig) => {
       return middlewares;
     };
   }
-
+  devServerConfig.allowedHosts = "all";
   return devServerConfig;
 };
 
