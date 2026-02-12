@@ -15,43 +15,15 @@ from sqlalchemy.orm import declarative_base, relationship, sessionmaker, scoped_
 
 
 # DATABASE_URL = os.environ.get("DATABASE_URL")
-DATABASE_URL= "postgresql+psycopg2://postgres:edd0ef31fdc784f9309438a325b64d0aba4c59649d2f4be1de036d7f669880e9@db.htpevovdkkvgjamnguuf.supabase.co:5432/postgres"
+DATABASE_URL= "postgresql://postgres.htpevovdkkvgjamnguuf:edd0ef31fdc784f9309438a325b64d0aba4c59649d2f4be1de036d7f669880e9@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres"
 if not DATABASE_URL:
     raise RuntimeError(
         "DATABASE_URL must be set (e.g. your Supabase Postgres connection string)."
     )
 
-
-# Workaround for Vercel/Supabase IPv6 issues: force IPv4 resolution
-import socket
-from urllib.parse import urlparse
-
-if "supa" in DATABASE_URL or "postgres" in DATABASE_URL:
-    try:
-        # Parse the URL to get the hostname
-        result = urlparse(DATABASE_URL)
-        hostname = result.hostname
-        if hostname:
-             # Resolve to IPv4 address
-            ip_address = socket.gethostbyname(hostname)
-            # Add hostaddr to connect_args
-            # We keep sslmode='require' as it was
-            connect_args = {"sslmode": "require", "hostaddr": ip_address}
-            
-            # Print for debugging (optional, but helpful in logs)
-            print(f"Verified IPv4 for {hostname}: {ip_address}")
-        else:
-             connect_args = {"sslmode": "require"}
-    except Exception as e:
-        print(f"Failed to resolve IPv4 for database host: {e}")
-        # Fallback to default behavior
-        connect_args = {"sslmode": "require"}
-else:
-    connect_args = {"sslmode": "require"}
-
 # Example:
 # postgresql+psycopg2://postgres:YOUR_PASSWORD@YOUR_HOST:5432/postgres
-engine = create_engine(DATABASE_URL, echo=False, future=True, connect_args=connect_args)
+engine = create_engine(DATABASE_URL, echo=False, future=True)
 SessionLocal = scoped_session(
     sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 )
@@ -134,7 +106,7 @@ class Education(Base):
 
 
 def get_db():
-    """FastAPI-style dependency helper if needed laterghj. 1"""
+    """FastAPI-style dependency helper if needed later."""
     db = SessionLocal()
     try:
         yield db
