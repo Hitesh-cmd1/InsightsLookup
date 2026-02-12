@@ -23,7 +23,7 @@ if not DATABASE_URL:
 
 # Example:
 # postgresql+psycopg2://postgres:YOUR_PASSWORD@YOUR_HOST:5432/postgres
-engine = create_engine(DATABASE_URL, echo=False, future=True)
+engine = create_engine(DATABASE_URL, echo=False, future=True,     connect_args={"sslmode": "require"})
 SessionLocal = scoped_session(
     sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 )
