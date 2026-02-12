@@ -1,6 +1,22 @@
-
 from pdfquery import PDFQuery
-from pipeline.save import save
+
+# Allow this file to be run both as part of the `pipeline` package
+# (e.g. `python -m pipeline.format_data`) and directly as a script
+# (e.g. `python pipeline/format_data.py` from the project root).
+try:
+    # When imported as part of the package
+    from pipeline.save import save
+except ModuleNotFoundError:
+    # When run directly, ensure the project root is on sys.path
+    import os
+    import sys
+
+    current_dir = os.path.dirname(__file__)
+    project_root = os.path.dirname(current_dir)
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
+    from pipeline.save import save
 
 
 
@@ -13,8 +29,10 @@ def format_text(file_name):
     education = False
     experience_list = []
     education_list = []
-    edu = [None,""]
+    edu = ["",""]
     exp = [None, None, None,None]
+    if pages[0][0].get("height") != "26.0":
+        return
     name = list(list(pages[0])[0])[0].text
     for t in pages:
         for element in list(t):
@@ -54,9 +72,9 @@ def format_text(file_name):
                 if element.tag == 'LTTextLineHorizontal' and len(list(element))==1 and element[0].tag == 'LTTextBoxHorizontal':
                     if "(" in edu[1] and ")" in edu[1]:
                         education_list.append(edu)
-                        edu = [None,""]
+                        edu = ["",""]
                     if element.get("height") == '12.0':
-                        edu[0] = element[0].text.strip()
+                        edu[0] = edu[0] + " " + element[0].text.strip()
                     elif element.get("height") == '10.5':
                         if not ("Page" in element.text and "of" in element.text):
                             edu[1] = edu[1] + " " +element[0].text.strip()
@@ -64,4 +82,4 @@ def format_text(file_name):
     save(name, experience_list, education_list)
     
 if __name__ == "__main__":
-    format_text("../link/ACoAADeOCIMBYsRFYDPUDngwP-7w3e1dbjMPp5c.pdf")
+    format_text("/Users/hitesh/Downloads/Profile_57.pdf")

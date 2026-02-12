@@ -1,30 +1,37 @@
 """List all file paths in a folder."""
 from pathlib import Path
 
-from format_data import  format_text 
+try:
+    from pipeline.format_data import format_text
+except ModuleNotFoundError:
+    import os
+    import sys
 
-def list_file_names(folder_path: str | Path = "../link", include_subdirs: bool = False) -> list[Path]:
+    current_dir = os.path.dirname(__file__)
+    project_root = os.path.dirname(current_dir)
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
+    from pipeline.format_data import format_text
+
+def list_file_names() -> list[Path]:
     """
     Return a list of Path objects for files in the given folder.
     folder_path: path to the folder (default: current directory)
     include_subdirs: if True, include files from subdirectories
     """
-    folder = Path(folder_path).resolve()
+    folder = Path("link2").resolve()
+    print(folder)
     if not folder.is_dir():
         raise NotADirectoryError(f"Not a directory: {folder}")
-
-    if include_subdirs:
-        return sorted(p for p in folder.rglob("*") if p.is_file())
     return sorted(p for p in folder.iterdir() if p.is_file())
 
 
 if __name__ == "__main__":
     import sys
 
-    folder = sys.argv[1] if len(sys.argv) > 1 else "../link"
-    subdirs = "--all" in sys.argv or "-a" in sys.argv
 
-    paths = list_file_names(folder, include_subdirs=subdirs)
+    paths = list_file_names()
     for p in paths:
         print(p)
         format_text(p)

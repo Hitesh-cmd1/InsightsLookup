@@ -14,10 +14,18 @@ if __package__ is None or __package__ == "":  # pragma: no cover
 
 from flask import Flask, jsonify, request
 
-from db.models import get_db, init_db, Organization, Experience
+from db.models import get_db, init_db, Organization, Experience, Role
 
 
 app = Flask(__name__)
+
+
+@app.after_request
+def _add_cors(resp):
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return resp
 
 
 def parse_date(date_str: str | None):
@@ -107,6 +115,7 @@ def org_transitions():
     start_date_str = request.args.get("start_date")
     end_date_str = request.args.get("end_date")
     hops = request.args.get("hops", type=int, default=3)
+    role_filter = request.args.get("role", type=str)
 
     start_date = parse_date(start_date_str)
     end_date = parse_date(end_date_str) if end_date_str else date.today()
@@ -117,6 +126,18 @@ def org_transitions():
         return jsonify({"error": "Invalid 'end_date' format. Use YYYY-MM-DD."}), 400
 
     for db in get_db():
+        # Resolve role IDs that match the optional role filter (if any)
+        matching_role_ids: set[int] = set()
+        if role_filter:
+            role_filter_clean = role_filter.strip()
+            if role_filter_clean:
+                matching_roles = (
+                    db.query(Role)
+                    .filter(Role.name.ilike(f"%{role_filter_clean}%"))
+                    .all()
+                )
+                matching_role_ids = {r.id for r in matching_roles}
+
         # 1) Find all exit events from target org in the period
         exit_query = db.query(Experience).filter(
             Experience.organization_id == org_id,
@@ -152,6 +173,9 @@ def org_transitions():
 
         # Track transitions: {hop_number: {org_id: {"count": N, "years": [2020, 2021, ...]}}}
         hop_counts = {}
+        # Track which destination orgs have at least one hire into a role
+        # matching the optional role filter (across any hop).
+        role_match_org_ids: set[int] = set()
 
         for exit_stint in exit_stints:
             emp_id = exit_stint.employee_id
@@ -181,6 +205,9 @@ def org_transitions():
                 # Track the year of transition (year of start_date)
                 if job.start_date:
                     hop_counts[hop_idx][org_id_dest]["years"].add(job.start_date.year)
+                # If we have a role filter, mark orgs that hired into matching roles.
+                if matching_role_ids and job.role_id in matching_role_ids:
+                    role_match_org_ids.add(org_id_dest)
 
         # Fetch org names for all destination orgs
         all_dest_org_ids = set()
@@ -193,20 +220,34 @@ def org_transitions():
         else:
             org_name_by_id = {}
 
-        # Build final response with org names (sorted by count descending)
+        # Build a helper map of total counts across all hops for each destination org
+        total_counts_by_org_id: dict[int, int] = {}
+        for hop_num, org_map in hop_counts.items():
+            for org_id_dest, data in org_map.items():
+                total_counts_by_org_id[org_id_dest] = (
+                    total_counts_by_org_id.get(org_id_dest, 0) + data["count"]
+                )
+
+        # Build final response with org ids/names (sorted by hop-specific count descending)
         result = {}
         for hop_num, org_map in sorted(hop_counts.items()):
-            # Sort by count (descending), then by org name (ascending) for ties
+            # Sort by hop-specific count (descending), then by org name (ascending) for ties
             sorted_orgs = sorted(
-                org_map.items(), 
+                org_map.items(),
                 key=lambda x: (-x[1]["count"], org_name_by_id[x[0]])
             )
             # Return as list to preserve sort order
             result[str(hop_num)] = [
                 {
-                    "organization": org_name_by_id[org_id], 
+                    "organization_id": org_id,
+                    "organization": org_name_by_id[org_id],
                     "count": data["count"],
-                    "years": sorted(list(data["years"]))  # Convert set to sorted list
+                    # Total number of people who reached this org across *all* hops
+                    "total_count": total_counts_by_org_id.get(org_id, data["count"]),
+                    "years": sorted(list(data["years"])),  # Convert set to sorted list
+                    # True if at least one hire from the source org into a role
+                    # whose name matches the optional `role` filter (any hop).
+                    "role_match": org_id in role_match_org_ids,
                 }
                 for org_id, data in sorted_orgs
             ]
@@ -228,6 +269,8 @@ def employee_transitions():
     - hop (int, required): Exact hop number (1 = immediate next job, 2 = job after that, etc).
     - start_date (str, optional): only consider exits whose end_date is on/after this date (YYYY-MM-DD).
     - end_date (str, optional): only consider exits whose end_date is on/before this date (YYYY-MM-DD).
+    - role (str, optional): if provided, only return employees whose experience
+      history contains this role name (case-insensitive match).
 
     Returns:
     [
@@ -245,6 +288,7 @@ def employee_transitions():
     hop = request.args.get("hop", type=int)
     start_date_str = request.args.get("start_date")
     end_date_str = request.args.get("end_date")
+    role_filter = request.args.get("role", type=str)
 
     if not source_org_id:
         return jsonify({"error": "Missing required query parameter 'source_org_id' (int)"}), 400
@@ -372,6 +416,23 @@ def employee_transitions():
                     del exp["organization_id"]
                     del exp["role_id"]
 
+        # Highlight employees who match the role filter (fuzzy match)
+        # We NO LONGER filter out non-matching employees. We just flag them.
+        if role_filter:
+            role_filter_lower = role_filter.strip().lower()
+            if role_filter_lower:
+                for emp in matching_employees:
+                    history = emp.get("experience_history", [])
+                    has_role = any(
+                        role_filter_lower in (exp.get("role") or "").lower()
+                        for exp in history
+                    )
+                    emp["role_match"] = has_role
+        else:
+            # If no filter provided, no one is "highlighted" specifically (or all false)
+            for emp in matching_employees:
+                emp["role_match"] = False
+
         # Sort by employee name
         matching_employees.sort(key=lambda x: x["employee_name"])
 
@@ -381,4 +442,4 @@ def employee_transitions():
 if __name__ == "__main__":
     # Ensure tables exist, then run the dev server.
     init_db()
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5001, debug=True)
