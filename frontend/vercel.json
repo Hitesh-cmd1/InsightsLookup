@@ -1,8 +1,8 @@
 {
-    "buildCommand": "npm run build",
+    "buildCommand": "yarn build",
     "outputDirectory": "build",
-    "devCommand": "npm start",
-    "installCommand": "npm install --legacy-peer-deps",
+    "devCommand": "yarn start",
+    "installCommand": "yarn install",
     "framework": null,
     "rewrites": [
         {
