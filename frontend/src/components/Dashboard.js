@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Search, X, ExternalLink, Loader2 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -152,7 +152,7 @@ const Dashboard = () => {
   ]);
 
   // Fallback mock data only when no org context (e.g. direct visit to /dashboard)
-  const mockCompanies = [
+  const mockCompanies = useMemo(() => [
     {
       rank: 1,
       name: 'Amazon',
@@ -353,7 +353,7 @@ const Dashboard = () => {
       ],
       years: [2025, 2024]
     }
-  ];
+  ], []);
 
   const years = Array.from({ length: 50 }, (_, i) => new Date().getFullYear() - i);
 
@@ -418,7 +418,7 @@ const Dashboard = () => {
         setTotalAlumni(0);
       })
       .finally(() => setLoading(false));
-  }, [searchParams.orgId, searchParams.startYear, searchParams.endYear]);
+  }, [searchParams.orgId, searchParams.startYear, searchParams.endYear, contextRole, mockCompanies]);
 
   // Client-side filter by search name (and other filters if needed)
   const applyCommonFilters = (list) => {

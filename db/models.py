@@ -15,6 +15,7 @@ from sqlalchemy.orm import declarative_base, relationship, sessionmaker, scoped_
 
 
 # DATABASE_URL = os.environ.get("DATABASE_URL")
+# DATABASE_URL= "postgresql+psycopg2://postgres:edd0ef31fdc784f9309438a325b64d0aba4c59649d2f4be1de036d7f669880e9@db.htpevovdkkvgjamnguuf.supabase.co:5432/postgres"
 DATABASE_URL= "postgresql://postgres.htpevovdkkvgjamnguuf:edd0ef31fdc784f9309438a325b64d0aba4c59649d2f4be1de036d7f669880e9@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres"
 if not DATABASE_URL:
     raise RuntimeError(
