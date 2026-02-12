@@ -2,3 +2,5 @@ requests
 pdfquery
 pandas
 openpyxl
+flask
+sqlalchemy
