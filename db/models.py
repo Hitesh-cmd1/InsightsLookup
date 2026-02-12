@@ -134,7 +134,7 @@ class Education(Base):
 
 
 def get_db():
-    """FastAPI-style dependency helper if needed later."""
+    """FastAPI-style dependency helper if needed laterghj. 1"""
     db = SessionLocal()
     try:
         yield db
