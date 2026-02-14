@@ -221,7 +221,7 @@ const Dashboard = () => {
         setTotalAlumni(0);
       })
       .finally(() => setLoading(false));
-  }, [searchParams.orgId, searchParams.startYear, searchParams.endYear, contextRole, user, openLogin, authLoading]);
+  }, [searchParams.orgId, searchParams.startYear, searchParams.endYear, contextRole, user, openLogin, authLoading, location.state, navigate]);
 
   // Fetch alumni when the tab is active
   useEffect(() => {
