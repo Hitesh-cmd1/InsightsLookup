@@ -692,13 +692,34 @@ const Dashboard = () => {
                           {company.name}
                         </h3>
                         <a
-                          href={`https://google.com/search?q=${encodeURIComponent(company.name)}+careers`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()} // Prevent card click navigation
-                        >
-                          <ExternalLink className="w-4 h-4 text-[#78716C] flex-shrink-0 cursor-pointer hover:text-[#3B82F6]" />
-                        </a>
+                            href={`https://google.com/search?q=${encodeURIComponent(company.name)}+careers`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="flex items-center gap-1 group cursor-pointer"
+                          >
+                            {/* Icon */}
+                            <ExternalLink
+                              className="
+                                w-4 h-4 text-gray-500
+                                transition-all duration-200
+                                group-hover:-translate-x-1
+                              "
+                            />
+                          
+                            {/* Careers text */}
+                            <span
+                              className="
+                                text-sm text-gray-600
+                                opacity-0 max-w-0 overflow-hidden
+                                transition-all duration-200
+                                group-hover:opacity-100 group-hover:max-w-[80px]
+                              "
+                            >
+                              Careers
+                            </span>
+                          </a>
+
                       </div>
 
                       {/* People and Recent */}
