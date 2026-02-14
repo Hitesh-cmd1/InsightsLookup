@@ -131,10 +131,9 @@ def request_otp():
         if existing_otp:
             # If the last attempt was over an hour ago OR the current OTP is expired, 
             # we can consider resetting the resend count to allow a fresh start.
-            is_expired = existing_otp.expires_at and now > existing_otp.expires_at
             was_long_ago = existing_otp.last_sent_at and now > existing_otp.last_sent_at + timedelta(hours=1)
             
-            if was_long_ago or is_expired:
+            if was_long_ago:
                 existing_otp.resend_count = 0
 
             # Rule: OTP resend allowed after 60 sec
