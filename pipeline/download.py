@@ -54,6 +54,6 @@ def download_profile(cookie, profile_id):
             filename = Path("../link/"+profile_id+".pdf")
             data = requests.get(download_url, cookies=cookies, headers=headers)
             filename.write_bytes(data.content)
-            format_text(filename)
+            format_text(filename, profile_id)
 
 

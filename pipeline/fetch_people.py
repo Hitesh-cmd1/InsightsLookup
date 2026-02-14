@@ -1,11 +1,16 @@
 import requests
 from pipeline.download import download_profile
+from db.models import Employee, SessionLocal, init_db
 
 def get_profile_id(profile):
     if "*entityResult" in profile:
         return profile["*entityResult"].split(":")[6].split(",")[0]
 
 def get_people(cookie, start=0,school_id=None, past_org=None, keyword=None):
+    print(start)
+    # Initialize database tables if they don't exist
+    init_db()
+    db = SessionLocal()
     filter = ""
     if school_id:
         filter = filter + ",(key:schoolFilter,value:List("+str(school_id)+"))" #,(key:facetFieldOfStudy,value:List(100674,100905,101409,100417,100078,100069))"
@@ -35,11 +40,21 @@ def get_people(cookie, start=0,school_id=None, past_org=None, keyword=None):
         resp = response.json()
         items =  resp["data"]["data"]["searchDashClustersByAll"]["elements"][0]["items"]
         profile_ids = []
+        item_count = 0
         for item in items:
             profile = item["item"]
             profile_id = get_profile_id(profile)
             if profile_id:
                 profile_ids.append(profile_id)
-        for profile_id in profile_ids:
-            download_profile(cookie, profile_id)
-        return profile_ids
+        if profile_ids:
+            saved_profiles = db.query(Employee.profile_id).filter(Employee.profile_id.in_(profile_ids)).all()
+            saved_profiles = [profile_id.profile_id for profile_id in saved_profiles]
+            saved_profiles = set(saved_profiles)
+            for profile_id in profile_ids:
+                item_count = item_count + 1
+                print(item_count+start)
+                if profile_id not in saved_profiles:
+                    download_profile(cookie, profile_id)
+                else:
+                    print("Skipping: Employee with profile_id '"+profile_id+"' already exists for fetch")
+    db.close()

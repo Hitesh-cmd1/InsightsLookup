@@ -15,8 +15,9 @@ from sqlalchemy.orm import declarative_base, relationship, sessionmaker, scoped_
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
-    DATABASE_URL= "postgresql+psycopg2://postgres:edd0ef31fdc784f9309438a325b64d0aba4c59649d2f4be1de036d7f669880e9@db.htpevovdkkvgjamnguuf.supabase.co:5432/postgres"
-#DATABASE_URL= "postgresql://postgres.htpevovdkkvgjamnguuf:edd0ef31fdc784f9309438a325b64d0aba4c59649d2f4be1de036d7f669880e9@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres"
+    # Use the pooler host as the direct host is experiencing DNS resolution issues
+    DATABASE_URL= "postgresql+psycopg2://postgres.htpevovdkkvgjamnguuf:edd0ef31fdc784f9309438a325b64d0aba4c59649d2f4be1de036d7f669880e9@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres"
+#DATABASE_URL= "postgresql+psycopg2://postgres:edd0ef31fdc784f9309438a325b64d0aba4c59649d2f4be1de036d7f669880e9@db.htpevovdkkvgjamnguuf.supabase.co:5432/postgres"
 if not DATABASE_URL:
     raise RuntimeError(
         "DATABASE_URL must be set (e.g. your Supabase Postgres connection string)."
@@ -39,6 +40,7 @@ class Employee(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
+    profile_id = Column(String, unique=True, nullable=True)
 
     experiences = relationship(
         "Experience", back_populates="employee", cascade="all, delete-orphan"

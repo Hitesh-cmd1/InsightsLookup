@@ -91,14 +91,21 @@ def get_or_create_lookup(session, model, name_field, name_value):
     return obj
 
 
-def save(name, exp_list, edu_list):
+def save(name, profile_id, exp_list, edu_list):
     # Ensure tables exist
     init_db()
 
     db = SessionLocal()
     try:
+        # Check if employee with this profile_id already exists
+        if profile_id:
+            existing = db.query(Employee).filter(Employee.profile_id == profile_id).first()
+            if existing:
+                print(f"Skipping: Employee with profile_id '{profile_id}' already exists (id={existing.id})")
+                return existing.id
+        
         # Create employee
-        employee = Employee(name=name)
+        employee = Employee(name=name, profile_id=profile_id)
         db.add(employee)
         db.flush()  # get employee.id
 

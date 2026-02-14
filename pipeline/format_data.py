@@ -20,7 +20,7 @@ except ModuleNotFoundError:
 
 
 
-def format_text(file_name):
+def format_text(file_name, profile_id):
 
     pdf = PDFQuery(file_name)
     pdf.load()
@@ -79,7 +79,7 @@ def format_text(file_name):
                         if not ("Page" in element.text and "of" in element.text):
                             edu[1] = edu[1] + " " +element[0].text.strip()
                             
-    save(name, experience_list, education_list)
+    save(name, profile_id, experience_list, education_list)
     
 if __name__ == "__main__":
     format_text("/Users/hitesh/Downloads/Profile_57.pdf")

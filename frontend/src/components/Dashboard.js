@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Search, X, ExternalLink, Loader2 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { getOrgTransitions, getEmployeeTransitions } from '../api/insights';
+import { getOrgTransitions, getEmployeeTransitions, getAlumni } from '../api/insights';
 
 /**
  * Transform API /org-transitions response into two sets of company cards:
@@ -133,23 +133,16 @@ const Dashboard = () => {
 
   const [companiesFirst, setCompaniesFirst] = useState([]);
   const [companiesSecond, setCompaniesSecond] = useState([]);
+  const [alumni, setAlumni] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingAlumni, setLoadingAlumni] = useState(false);
   const [error, setError] = useState(null);
   const [totalAlumni, setTotalAlumni] = useState(0);
 
-  // Edit Context modal state (role-based highlighting + user profile)
-  const [isContextModalOpen, setIsContextModalOpen] = useState(false);
+  // role-based highlighting state
   const [contextRole, setContextRole] = useState(stateFromStorage.role || '');
   const [contextApplying, setContextApplying] = useState(false);
   const [highlightedOrgIds, setHighlightedOrgIds] = useState(new Set());
-  const [profileCompanies, setProfileCompanies] = useState([
-    { company: '', role: '', start: '', end: '' },
-    { company: '', role: '', start: '', end: '' },
-  ]);
-  const [profileColleges, setProfileColleges] = useState([
-    { college: '', startYear: '', endYear: '', department: '' },
-    { college: '', startYear: '', endYear: '', department: '' },
-  ]);
 
   // Fallback mock data only when no org context (e.g. direct visit to /dashboard)
   const mockCompanies = useMemo(() => [
@@ -420,6 +413,24 @@ const Dashboard = () => {
       .finally(() => setLoading(false));
   }, [searchParams.orgId, searchParams.startYear, searchParams.endYear, contextRole, mockCompanies]);
 
+  // Fetch alumni when the tab is active
+  useEffect(() => {
+    if (activeTab !== 'alumni' || !searchParams.orgId) return;
+
+    setLoadingAlumni(true);
+    const startDate = searchParams.startYear ? `${searchParams.startYear}-01-01` : null;
+    const endDate = searchParams.endYear ? `${searchParams.endYear}-12-31` : null;
+
+    getAlumni(searchParams.orgId, { startDate, endDate })
+      .then((data) => {
+        setAlumni(data);
+      })
+      .catch((err) => {
+        console.error('Failed to load alumni', err);
+      })
+      .finally(() => setLoadingAlumni(false));
+  }, [activeTab, searchParams.orgId, searchParams.startYear, searchParams.endYear]);
+
   // Client-side filter by search name (and other filters if needed)
   const applyCommonFilters = (list) => {
     let next = list;
@@ -459,6 +470,20 @@ const Dashboard = () => {
   const filteredCompaniesSecond = applyCommonFilters(companiesSecond);
 
   const isOrgHighlighted = (orgId) => highlightedOrgIds.has(orgId);
+
+  // Filter alumni list
+  const filteredAlumni = useMemo(() => {
+    let next = alumni;
+    if (searchName.trim()) {
+      next = next.filter(a => a.name.toLowerCase().includes(searchName.toLowerCase()));
+    }
+    if (noPostJourney) {
+      // "No post-company journey" means the path is empty (they are still at the company or we don't know where they went)
+      // Actually, in the backend current_company defaults to org_id if path is empty.
+      next = next.filter(a => !a.path || a.path.length === 0);
+    }
+    return next;
+  }, [alumni, searchName, noPostJourney]);
 
   const applyRoleContext = async () => {
     const role = (contextRole || '').trim();
@@ -512,7 +537,6 @@ const Dashboard = () => {
       }
 
       setHighlightedOrgIds(highlighted);
-      setIsContextModalOpen(false);
     } finally {
       setContextApplying(false);
     }
@@ -552,80 +576,9 @@ const Dashboard = () => {
                 {totalAlumni}
               </p>
             </div>
-            <button
-              className="px-4 py-2 text-sm border border-[#E7E5E4] rounded-lg hover:bg-[#F5F5F4] transition-colors"
-              onClick={() => setIsContextModalOpen(true)}
-            >
-              Edit Context
-            </button>
           </div>
         </div>
       </header>
-
-      {/* Edit Context Modal */}
-      {isContextModalOpen && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-xl shadow-lg max-w-2xl w-full mx-4 p-6 relative">
-            {/* Close button */}
-            <button
-              type="button"
-              className="absolute right-4 top-4 text-[#78716C] hover:text-[#1C1917]"
-              onClick={() => setIsContextModalOpen(false)}
-            >
-              <X className="w-4 h-4" />
-            </button>
-
-            {/* Title & description */}
-            <h2 className="text-lg font-semibold text-[#1C1917] mb-2">
-              Edit Context & Referral Profile
-            </h2>
-            <p className="text-sm text-[#78716C] mb-4">
-              This section collects your current profile so we can later prioritize
-              companies where alumni are most likely to help with referrals.
-              Changes are not applied automatically – use the button below to
-              prioritize companies based on referral help.
-            </p>
-
-            {/* Scrollable content */}
-            <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-1">
-              {/* Role for similarity-based highlighting */}
-              <div>
-                <label className="block text-sm font-medium text-[#1C1917] mb-1">
-                  Your current / target role
-                </label>
-                <input
-                  type="text"
-                  value={contextRole}
-                  onChange={(e) => setContextRole(e.target.value)}
-                  placeholder="e.g. Senior Product Manager"
-                  className="w-full px-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917]"
-                />
-              </div>
-            </div>
-
-            {/* Footer actions */}
-            <div className="flex justify-end gap-3 mt-4">
-              <button
-                type="button"
-                className="px-4 py-2 text-sm text-[#78716C] hover:text-[#1C1917]"
-                onClick={() => setIsContextModalOpen(false)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={contextApplying}
-                className="px-4 py-2 text-sm bg-[#1C1917] text-white rounded-lg hover:bg-[#292524] disabled:opacity-70"
-                onClick={applyRoleContext}
-              >
-                {contextApplying
-                  ? 'Prioritizing...'
-                  : 'Prioritize companies based on referral help'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Filters */}
       <div className="bg-white border-b border-[#E7E5E4]">
@@ -641,6 +594,21 @@ const Dashboard = () => {
                 onChange={(e) => setSearchName(e.target.value)}
                 className="pl-9 pr-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917] w-48"
                 data-testid="search-name-input"
+              />
+            </div>
+
+            {/* Role Search */}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#78716C]" />
+              <input
+                type="text"
+                placeholder="Role (e.g. Product)..."
+                value={contextRole}
+                onChange={(e) => setContextRole(e.target.value)}
+                onBlur={applyRoleContext}
+                onKeyDown={(e) => e.key === 'Enter' && applyRoleContext()}
+                className="pl-9 pr-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917] w-48"
+                data-testid="role-search-input"
               />
             </div>
 
@@ -713,17 +681,7 @@ const Dashboard = () => {
                 className="w-4 h-4 rounded border-[#E7E5E4]"
                 data-testid="no-post-journey-checkbox"
               />
-              No post-Varahe journey
-            </label>
-            <label className="flex items-center gap-2 text-sm text-[#1C1917] cursor-pointer">
-              <input
-                type="checkbox"
-                checked={dataBusinessRoles}
-                onChange={(e) => setDataBusinessRoles(e.target.checked)}
-                className="w-4 h-4 rounded border-[#E7E5E4]"
-                data-testid="data-business-roles-checkbox"
-              />
-              Data & Business roles
+              No post-{searchParams.companyName || 'Company'} journey
             </label>
             <button
               onClick={clearAllFilters}
@@ -1072,8 +1030,72 @@ const Dashboard = () => {
         )}
 
         {activeTab === 'alumni' && (
-          <div className="text-center py-16">
-            <p className="text-[#78716C]">Alumni list view coming soon...</p>
+          <div className="space-y-6">
+            <div className="flex items-center justify-between mb-6 bg-[#F1F5F9] px-6 py-4 rounded-lg">
+              <h2 className="text-lg font-semibold text-[#1C1917]">
+                Alumni ({filteredAlumni.length})
+              </h2>
+              <span className="text-sm text-[#78716C]">
+                Showing currently {filteredAlumni.length} alumni
+              </span>
+            </div>
+
+            {loadingAlumni ? (
+              <div className="flex items-center justify-center py-24">
+                <Loader2 className="w-10 h-10 text-[#3B82F6] animate-spin" />
+              </div>
+            ) : (
+              <motion.div
+                className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.5 }}
+              >
+                {filteredAlumni.map((person, index) => (
+                  <motion.div
+                    key={person.id}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: index * 0.05, duration: 0.4 }}
+                    className="bg-white border border-[#E7E5E4] rounded-xl p-6 hover:shadow-md transition-all shadow-sm"
+                  >
+                    <h3 className="text-lg font-bold text-[#1C1917] mb-1" style={{ fontFamily: "'Playfair Display', serif" }}>
+                      {person.name}
+                    </h3>
+                    <p className="text-sm text-[#78716C] mb-4">
+                      Exited {person.exited_year}
+                    </p>
+
+                    <div className="space-y-2">
+                      {person.path && person.path.length > 0 ? (
+                        person.path.map((company, i) => (
+                          <div key={i} className="flex items-start gap-2">
+                            <div className="w-1 h-1 rounded-full bg-[#78716C] mt-2 flex-shrink-0" />
+                            <p className={`text-sm ${i === person.path.length - 1 ? 'text-[#059669] font-medium' : 'text-[#44403C]'}`}>
+                              {i === person.path.length - 1 && <span className="mr-1">📍</span>}
+                              {company}
+                            </p>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="flex items-start gap-2">
+                          <div className="w-1 h-1 rounded-full bg-[#78716C] mt-2 flex-shrink-0" />
+                          <p className="text-sm text-[#059669] font-medium">
+                            📍 {person.current_company}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </motion.div>
+                ))}
+              </motion.div>
+            )}
+
+            {alumni.length === 0 && !loadingAlumni && (
+              <div className="text-center py-24">
+                <p className="text-[#78716C]">No alumni data found for this period.</p>
+              </div>
+            )}
           </div>
         )}
 

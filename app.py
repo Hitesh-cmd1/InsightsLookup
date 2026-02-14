@@ -194,20 +194,35 @@ def org_transitions():
             # Sort by start date to get chronological order
             subsequent_jobs.sort(key=lambda x: (x.start_date, x.id))
 
+            # Collapse consecutive jobs at same org into a single 'hop'
+            unique_hops = []
+            for job in subsequent_jobs:
+                if not unique_hops or job.organization_id != unique_hops[-1]["org_id"]:
+                    unique_hops.append({
+                        "org_id": job.organization_id,
+                        "start_date": job.start_date,
+                        "role_ids": {job.role_id} if job.role_id else set()
+                    })
+                else:
+                    # Same company consecutively - append role to this hop
+                    if job.role_id:
+                        unique_hops[-1]["role_ids"].add(job.role_id)
+
             # Count hops (up to limit)
-            for hop_idx, job in enumerate(subsequent_jobs[:hops], start=1):
+            for hop_idx, h_data in enumerate(unique_hops[:hops], start=1):
                 if hop_idx not in hop_counts:
                     hop_counts[hop_idx] = {}
-                org_id_dest = job.organization_id
+                org_id_dest = h_data["org_id"]
                 if org_id_dest not in hop_counts[hop_idx]:
                     hop_counts[hop_idx][org_id_dest] = {"count": 0, "years": set()}
                 hop_counts[hop_idx][org_id_dest]["count"] += 1
                 # Track the year of transition (year of start_date)
-                if job.start_date:
-                    hop_counts[hop_idx][org_id_dest]["years"].add(job.start_date.year)
-                # If we have a role filter, mark orgs that hired into matching roles.
-                if matching_role_ids and job.role_id in matching_role_ids:
-                    role_match_org_ids.add(org_id_dest)
+                if h_data["start_date"]:
+                    hop_counts[hop_idx][org_id_dest]["years"].add(h_data["start_date"].year)
+                # If we have a role filter, mark orgs if ANY role in this hop matches.
+                if matching_role_ids:
+                    if any(rid in matching_role_ids for rid in h_data["role_ids"]):
+                        role_match_org_ids.add(org_id_dest)
 
         # Fetch org names for all destination orgs
         all_dest_org_ids = set()
@@ -360,9 +375,15 @@ def employee_transitions():
             # Sort by start date
             subsequent_jobs.sort(key=lambda x: (x.start_date, x.id))
 
+            # Collapse consecutive jobs at same org into a single 'hop'
+            unique_hops = []
+            for job in subsequent_jobs:
+                if not unique_hops or job.organization_id != unique_hops[-1].organization_id:
+                    unique_hops.append(job)
+
             # Check if the employee reached dest_org at exactly the specified hop
-            if hop <= len(subsequent_jobs):
-                target_job = subsequent_jobs[hop - 1]  # hop is 1-indexed
+            if hop <= len(unique_hops):
+                target_job = unique_hops[hop - 1]  # hop is 1-indexed
                 if target_job.organization_id == dest_org_id:
                     # Build complete experience history in chronological order
                     history = []
@@ -437,6 +458,99 @@ def employee_transitions():
         matching_employees.sort(key=lambda x: x["employee_name"])
 
         return jsonify(matching_employees)
+
+
+@app.get("/alumni")
+def get_alumni():
+    """
+    GET /alumni?org_id=...&start_date=...&end_date=...
+
+    Returns all employees who worked at the organization and their career paths.
+    """
+    org_id = request.args.get("org_id", type=int)
+    if not org_id:
+        return jsonify({"error": "Missing required query parameter 'org_id' (int)"}), 400
+
+    start_date_str = request.args.get("start_date")
+    end_date_str = request.args.get("end_date")
+
+    start_date = parse_date(start_date_str)
+    end_date = parse_date(end_date_str) if end_date_str else date.today()
+
+    for db in get_db():
+        # 1) Find all exit events from target org
+        exit_query = db.query(Experience).filter(
+            Experience.organization_id == org_id,
+            Experience.end_date.isnot(None),
+        )
+        if start_date:
+            exit_query = exit_query.filter(Experience.end_date >= start_date)
+        if end_date:
+            exit_query = exit_query.filter(Experience.end_date <= end_date)
+
+        exit_stints = exit_query.all()
+        if not exit_stints:
+            return jsonify([])
+
+        employee_ids = list(set(e.employee_id for e in exit_stints))
+
+        # 2) Fetch all experiences and employee names
+        from db.models import Employee, School
+        employees = db.query(Employee).filter(Employee.id.in_(employee_ids)).all()
+        emp_name_by_id = {e.id: e.name for e in employees}
+
+        all_exps = (
+            db.query(Experience)
+            .filter(
+                Experience.employee_id.in_(employee_ids),
+                Experience.organization_id.isnot(None),
+            )
+            .order_by(Experience.employee_id, Experience.start_date, Experience.id)
+            .all()
+        )
+
+        org_ids = set(e.organization_id for e in all_exps if e.organization_id)
+        orgs = db.query(Organization).filter(Organization.id.in_(org_ids)).all()
+        org_name_by_id = {o.id: o.name for o in orgs}
+
+        # 3) Group by employee and build transition path
+        exps_by_emp = {}
+        for exp in all_exps:
+            exps_by_emp.setdefault(exp.employee_id, []).append(exp)
+
+        alumni_list = []
+        for emp_id in employee_ids:
+            emp_exps = exps_by_emp.get(emp_id, [])
+            # Find the exit from our target org
+            target_exit = next((e for e in exit_stints if e.employee_id == emp_id), None)
+            if not target_exit:
+                continue
+
+            # Path: jobs after the exit (collapsed consecutive orgs)
+            path_jobs = []
+            current_raw_jobs = [
+                e for e in emp_exps
+                if e.start_date and e.start_date >= target_exit.end_date
+                and e.id != target_exit.id
+            ]
+            current_raw_jobs.sort(key=lambda x: (x.start_date, x.id))
+            
+            for job in current_raw_jobs:
+                if not path_jobs or job.organization_id != path_jobs[-1].organization_id:
+                    path_jobs.append(job)
+
+            path = [org_name_by_id.get(j.organization_id, "Unknown") for j in path_jobs]
+
+            alumni_list.append({
+                "id": emp_id,
+                "name": emp_name_by_id.get(emp_id, "Unknown"),
+                "exited_year": target_exit.end_date.year,
+                "path": path,
+                "current_company": path[-1] if path else org_name_by_id.get(org_id)
+            })
+
+        alumni_list.sort(key=lambda x: x["name"])
+        return jsonify(alumni_list)
 
 
 if __name__ == "__main__":

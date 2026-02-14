@@ -103,3 +103,27 @@ export async function getEmployeeTransitions(
   }
   return res.json();
 }
+
+/**
+ * Fetch all alumni for a given organization (people who worked there and left).
+ */
+export async function getAlumni(orgId, { startDate, endDate } = {}) {
+  const id = orgId != null ? Number(orgId) : null;
+  if (id == null || Number.isNaN(id)) {
+    throw new Error('org_id is required');
+  }
+  const params = new URLSearchParams({ org_id: String(id) });
+  if (startDate) params.set('start_date', startDate);
+  if (endDate) params.set('end_date', endDate);
+
+  const url = API_BASE
+    ? `${API_BASE}/alumni?${params.toString()}`
+    : `/alumni?${params.toString()}`;
+
+  const res = await fetch(url);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to fetch alumni: ${res.status}`);
+  }
+  return res.json();
+}
