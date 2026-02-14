@@ -9,6 +9,15 @@ const API_BASE =
     ? process.env.REACT_APP_INSIGHTS_API_URL.replace(/\/$/, '')
     : 'http://localhost:5001';
 
+function getAuthHeaders() {
+  const token = localStorage.getItem('insights_token');
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
 export async function searchOrganizations(orgName) {
   const trimmed = (orgName || '').trim();
   if (!trimmed) {
@@ -19,7 +28,7 @@ export async function searchOrganizations(orgName) {
     : `/organizations?org_name=${encodeURIComponent(trimmed)}`;
   let res;
   try {
-    res = await fetch(url, { credentials: 'include' });
+    res = await fetch(url, { headers: getAuthHeaders() });
   } catch (netErr) {
     const msg =
       netErr.message && netErr.message.includes('Failed to fetch')
@@ -52,7 +61,7 @@ export async function getOrgTransitions(orgId, { startDate, endDate, hops = 3, r
   const url = API_BASE
     ? `${API_BASE}/org-transitions?${params.toString()}`
     : `/org-transitions?${params.toString()}`;
-  const res = await fetch(url, { credentials: 'include' });
+  const res = await fetch(url, { headers: getAuthHeaders() });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `Transitions failed: ${res.status}`);
@@ -96,7 +105,7 @@ export async function getEmployeeTransitions(
     ? `${API_BASE}/employee-transitions?${params.toString()}`
     : `/employee-transitions?${params.toString()}`;
 
-  const res = await fetch(url, { credentials: 'include' });
+  const res = await fetch(url, { headers: getAuthHeaders() });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `Employee transitions failed: ${res.status}`);
@@ -120,7 +129,7 @@ export async function getAlumni(orgId, { startDate, endDate } = {}) {
     ? `${API_BASE}/alumni?${params.toString()}`
     : `/alumni?${params.toString()}`;
 
-  const res = await fetch(url, { credentials: 'include' });
+  const res = await fetch(url, { headers: getAuthHeaders() });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `Failed to fetch alumni: ${res.status}`);
@@ -136,8 +145,7 @@ export async function requestOTP(email) {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email }),
-    credentials: 'include'
+    body: JSON.stringify({ email })
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -151,8 +159,7 @@ export async function verifyOTP(email, code) {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, code }),
-    credentials: 'include'
+    body: JSON.stringify({ email, code })
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -165,7 +172,7 @@ export async function logoutUser() {
   const url = API_BASE ? `${API_BASE}/logout` : '/logout';
   const res = await fetch(url, {
     method: 'POST',
-    credentials: 'include'
+    headers: getAuthHeaders()
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

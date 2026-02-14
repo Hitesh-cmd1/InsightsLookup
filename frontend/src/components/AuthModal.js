@@ -77,7 +77,7 @@ const AuthModal = ({ isOpen, onClose, onSuccess }) => {
         setLoading(true);
         try {
             const data = await verifyOTP(email, otp);
-            login(data.user);
+            login(data.user, data.token);
             toast.success('Logged in successfully');
             onSuccess?.();
             onClose();

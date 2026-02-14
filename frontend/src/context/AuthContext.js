@@ -22,9 +22,13 @@ export const AuthProvider = ({ children }) => {
         setLoading(false);
     }, []);
 
-    const login = (userData) => {
+    const login = (userData, token) => {
         setUser(userData);
         localStorage.setItem('insights_user', JSON.stringify(userData));
+        if (token) {
+            localStorage.setItem('insights_token', token);
+            sessionStorage.removeItem('insights_token'); // Cleanup old loc
+        }
     };
 
     const logout = async () => {
@@ -35,6 +39,8 @@ export const AuthProvider = ({ children }) => {
         }
         setUser(null);
         localStorage.removeItem('insights_user');
+        localStorage.removeItem('insights_token');
+        sessionStorage.removeItem('insights_token');
     };
 
     const openLogin = (callback = null) => {

@@ -45,14 +45,18 @@ def _add_cors(resp):
     if origin:
         resp.headers["Access-Control-Allow-Origin"] = origin
     resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     resp.headers["Access-Control-Allow-Credentials"] = "true"
     return resp
 
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        token = request.cookies.get("auth_token")
+        auth_header = request.headers.get("Authorization")
+        token = None
+        
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ")[1]
 
         if not token:
             return jsonify({"error": "Auth token is missing"}), 401
@@ -222,42 +226,20 @@ def verify_otp():
             "exp": datetime.now(timezone.utc) + timedelta(days=7)
         }, JWT_SECRET_KEY, algorithm="HS256")
 
-        response = jsonify({
+        return jsonify({
             "message": "Logged in successfully",
+            "token": token,
             "user": {
                 "id": user.id,
                 "email": user.email,
                 "name": user.name
             }
-        })
-        
-        # Set token in an HttpOnly cookie
-        response.set_cookie(
-            "auth_token",
-            token,
-            httponly=True,
-            secure=True,
-            samesite="None",
-            max_age=7 * 24 * 60 * 60,  # 7 days
-            path="/"
-        )
-        
-        return response, 200
+        }), 200
 
 
 @app.post("/logout")
 def logout():
-    response = jsonify({"message": "Logged out successfully"})
-    response.set_cookie(
-        "auth_token", 
-        "", 
-        expires=0, 
-        path="/", 
-        httponly=True,
-        secure=True,
-        samesite="None"
-    )
-    return response, 200
+    return jsonify({"message": "Logged out successfully"}), 200
 
 
 def parse_date(date_str: str | None):
