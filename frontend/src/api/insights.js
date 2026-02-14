@@ -7,7 +7,7 @@
 const API_BASE =
   process.env.REACT_APP_INSIGHTS_API_URL !== undefined && process.env.REACT_APP_INSIGHTS_API_URL !== ''
     ? process.env.REACT_APP_INSIGHTS_API_URL.replace(/\/$/, '')
-    : 'https://insightslookup.onrender.com';
+    : 'https://insights-lookup.vercel.app';
 
 export async function searchOrganizations(orgName) {
   const trimmed = (orgName || '').trim();
