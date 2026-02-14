@@ -236,7 +236,7 @@ def verify_otp():
             "auth_token",
             token,
             httponly=True,
-            secure=False,  # Set to True in production (HTTPS)
+            secure=True,  # Set to True in production (HTTPS)
             samesite="Lax",
             max_age=7 * 24 * 60 * 60,  # 7 days
             path="/"
