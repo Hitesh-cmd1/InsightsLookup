@@ -236,11 +236,10 @@ def verify_otp():
             "auth_token",
             token,
             httponly=True,
-            secure=True,  # Set to True in production (HTTPS)
+            secure=True,
             samesite="None",
             max_age=7 * 24 * 60 * 60,  # 7 days
-            path="/",
-            domain=".vercel.app"
+            path="/"
         )
         
         return response, 200
@@ -249,7 +248,15 @@ def verify_otp():
 @app.post("/logout")
 def logout():
     response = jsonify({"message": "Logged out successfully"})
-    response.set_cookie("auth_token", "", expires=0, path="/", httponly=True)
+    response.set_cookie(
+        "auth_token", 
+        "", 
+        expires=0, 
+        path="/", 
+        httponly=True,
+        secure=True,
+        samesite="None"
+    )
     return response, 200
 
 
