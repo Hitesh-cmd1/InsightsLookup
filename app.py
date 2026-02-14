@@ -239,7 +239,8 @@ def verify_otp():
             secure=True,  # Set to True in production (HTTPS)
             samesite="None",
             max_age=7 * 24 * 60 * 60,  # 7 days
-            path="/"
+            path="/",
+            domain="insights-lookup.vercel.app"
         )
         
         return response, 200
