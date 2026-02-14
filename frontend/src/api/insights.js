@@ -7,7 +7,7 @@
 const API_BASE =
   process.env.REACT_APP_INSIGHTS_API_URL !== undefined && process.env.REACT_APP_INSIGHTS_API_URL !== ''
     ? process.env.REACT_APP_INSIGHTS_API_URL.replace(/\/$/, '')
-    : 'https://insights-lookup.vercel.app';
+    : 'http://localhost:5001';
 
 export async function searchOrganizations(orgName) {
   const trimmed = (orgName || '').trim();
@@ -19,7 +19,7 @@ export async function searchOrganizations(orgName) {
     : `/organizations?org_name=${encodeURIComponent(trimmed)}`;
   let res;
   try {
-    res = await fetch(url);
+    res = await fetch(url, { credentials: 'include' });
   } catch (netErr) {
     const msg =
       netErr.message && netErr.message.includes('Failed to fetch')
@@ -52,7 +52,7 @@ export async function getOrgTransitions(orgId, { startDate, endDate, hops = 3, r
   const url = API_BASE
     ? `${API_BASE}/org-transitions?${params.toString()}`
     : `/org-transitions?${params.toString()}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { credentials: 'include' });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `Transitions failed: ${res.status}`);
@@ -96,7 +96,7 @@ export async function getEmployeeTransitions(
     ? `${API_BASE}/employee-transitions?${params.toString()}`
     : `/employee-transitions?${params.toString()}`;
 
-  const res = await fetch(url);
+  const res = await fetch(url, { credentials: 'include' });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `Employee transitions failed: ${res.status}`);
@@ -120,10 +120,56 @@ export async function getAlumni(orgId, { startDate, endDate } = {}) {
     ? `${API_BASE}/alumni?${params.toString()}`
     : `/alumni?${params.toString()}`;
 
-  const res = await fetch(url);
+  const res = await fetch(url, { credentials: 'include' });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `Failed to fetch alumni: ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * Auth Endpoints
+ */
+export async function requestOTP(email) {
+  const url = API_BASE ? `${API_BASE}/request-otp` : '/request-otp';
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+    credentials: 'include'
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to request OTP');
+  }
+  return res.json();
+}
+
+export async function verifyOTP(email, code) {
+  const url = API_BASE ? `${API_BASE}/verify-otp` : '/verify-otp';
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, code }),
+    credentials: 'include'
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to verify OTP');
+  }
+  return res.json();
+}
+
+export async function logoutUser() {
+  const url = API_BASE ? `${API_BASE}/logout` : '/logout';
+  const res = await fetch(url, {
+    method: 'POST',
+    credentials: 'include'
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to logout');
   }
   return res.json();
 }

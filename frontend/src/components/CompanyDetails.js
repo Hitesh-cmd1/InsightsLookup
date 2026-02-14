@@ -1,11 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Loader2, ArrowLeft } from 'lucide-react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { getEmployeeTransitions } from '../api/insights';
+import { useAuth } from '../context/AuthContext';
+import { TrendingUp, LogOut, User as UserIcon } from 'lucide-react';
 
 const CompanyDetails = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { user, openLogin, logout, loading: authLoading } = useAuth();
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const {
     sourceOrgId,
     destOrgId,
@@ -23,6 +28,13 @@ const CompanyDetails = () => {
   const [employees, setEmployees] = useState([]);
 
   useEffect(() => {
+    if (authLoading) return;
+
+    if (!user) {
+      openLogin();
+      return;
+    }
+
     if (!sourceOrgId || !destOrgId) {
       setError('Missing source or destination organization information.');
       setLoading(false);
@@ -55,37 +67,61 @@ const CompanyDetails = () => {
         setEmployees([]);
       })
       .finally(() => setLoading(false));
-  }, [sourceOrgId, destOrgId, hop, startYear, endYear, roleFilter]);
+  }, [sourceOrgId, destOrgId, hop, startYear, endYear, roleFilter, user, openLogin, authLoading]);
 
   const totalEmployees = employees.length;
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-[#FAFAF9] flex items-center justify-center">
+        <Loader2 className="w-10 h-10 text-[#3B82F6] animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#FAFAF9]">
       {/* Header */}
       <header className="bg-white border-b border-[#E7E5E4]">
         <div className="max-w-[1600px] mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => navigate(-1)}
-              className="p-2 rounded-lg border border-[#E7E5E4] hover:bg-[#F5F5F4] mr-2"
+          <div className="flex items-center gap-6">
+            <div
+              className="flex items-center gap-2 cursor-pointer"
+              onClick={() => navigate('/')}
             >
-              <ArrowLeft className="w-4 h-4 text-[#1C1917]" />
-            </button>
-            <div>
-              <h1
-                className="text-xl font-bold text-[#1C1917]"
-                style={{ fontFamily: "'Playfair Display', serif" }}
+              <div className="w-8 h-8 bg-[#1C1917] rounded-lg flex items-center justify-center">
+                <TrendingUp className="w-5 h-5 text-white" />
+              </div>
+              <span className="text-xl font-bold text-[#1C1917]" style={{ fontFamily: "'Playfair Display', serif" }}>
+                Insights
+              </span>
+            </div>
+
+            <div className="h-8 w-px bg-[#E7E5E4]" />
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => navigate(-1)}
+                className="p-2 rounded-lg border border-[#E7E5E4] hover:bg-[#F5F5F4] mr-2"
               >
-                {companyName || 'Company'} – Employees
-              </h1>
-              <p className="text-sm text-[#78716C]">
-                {startYear && endYear
-                  ? `Alumni who reached ${companyName || 'this company'} in hop ${hop} (${startYear}–${endYear})`
-                  : `Alumni who reached ${companyName || 'this company'} in hop ${hop}`}
-              </p>
+                <ArrowLeft className="w-4 h-4 text-[#1C1917]" />
+              </button>
+              <div>
+                <h1
+                  className="text-xl font-bold text-[#1C1917]"
+                  style={{ fontFamily: "'Playfair Display', serif" }}
+                >
+                  {companyName || 'Company'} – Employees
+                </h1>
+                <p className="text-sm text-[#78716C]">
+                  {startYear && endYear
+                    ? `Alumni who reached ${companyName || 'this company'} in hop ${hop} (${startYear}–${endYear})`
+                    : `Alumni who reached ${companyName || 'this company'} in hop ${hop}`}
+                </p>
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-4">
+
+          <div className="flex items-center gap-6">
             <div className="text-right">
               <p className="text-sm text-[#78716C]">Total People</p>
               <p
@@ -94,6 +130,53 @@ const CompanyDetails = () => {
               >
                 {totalEmployees}
               </p>
+            </div>
+
+            <div className="relative">
+              {user ? (
+                <div className="flex items-center gap-4">
+                  <button
+                    onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)}
+                    className="w-10 h-10 bg-[#1C1917]/5 hover:bg-[#1C1917]/10 rounded-full flex items-center justify-center transition-all"
+                  >
+                    <UserIcon className="w-5 h-5 text-[#1C1917]" />
+                  </button>
+
+                  <AnimatePresence>
+                    {isProfileMenuOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                        className="absolute right-0 top-full mt-2 w-48 bg-white border border-[#E7E5E4] rounded-xl shadow-lg p-2 z-40"
+                      >
+                        <div className="px-3 py-2 border-b border-[#E7E5E4] mb-1">
+                          <p className="text-xs text-[#78716C]">Signed in as</p>
+                          <p className="text-sm font-semibold text-[#1C1917] truncate">{user.name}</p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            logout();
+                            setIsProfileMenuOpen(false);
+                            navigate('/');
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[#EF4444] hover:bg-[#EF4444]/5 rounded-lg transition-all"
+                        >
+                          <LogOut className="w-4 h-4" />
+                          Logout
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              ) : (
+                <button
+                  onClick={() => openLogin()}
+                  className="px-6 py-2 bg-[#1C1917]/5 hover:bg-[#1C1917] hover:text-white rounded-full text-sm font-semibold transition-all"
+                >
+                  Login
+                </button>
+              )}
             </div>
           </div>
         </div>

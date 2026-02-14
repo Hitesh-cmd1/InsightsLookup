@@ -1,31 +1,255 @@
-from __future__ import annotations
+from datetime import date, datetime, timedelta, timezone
+import random
+import os
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from dotenv import load_dotenv
+import jwt
+from functools import wraps
 
-from datetime import date, datetime
+load_dotenv()
 
-# Allow running both:
-# - python -m app        (if you later package it)
-# - python app.py        (common)
-# - python path/to/app.py (works from other cwd)
-if __package__ is None or __package__ == "":  # pragma: no cover
-    import sys
-    from pathlib import Path
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+# ... (rest of path setup remains same)
 
 from flask import Flask, jsonify, request
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
-from db.models import get_db, init_db, Organization, Experience, Role
+from db.models import get_db, init_db, Organization, Experience, Role, User, OTP
 
 
 app = Flask(__name__)
+JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "your-super-secret-key-change-it")
 
+# Initialize Rate Limiter
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    default_limits=["500 per day", "100 per hour"],
+    storage_uri="memory://",
+)
+
+@limiter.request_filter
+def exempt_options():
+    return request.method == "OPTIONS"
+
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    return jsonify({"error": "Too many requests. Please try again later.", "description": str(e.description)}), 429
 
 @app.after_request
 def _add_cors(resp):
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    # For security with credentials=True, we cannot use "*"
+    origin = request.headers.get("Origin")
+    if origin:
+        resp.headers["Access-Control-Allow-Origin"] = origin
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    resp.headers["Access-Control-Allow-Credentials"] = "true"
     return resp
+
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.cookies.get("auth_token")
+
+        if not token:
+            return jsonify({"error": "Auth token is missing"}), 401
+
+        try:
+            data = jwt.decode(token, JWT_SECRET_KEY, algorithms=["HS256"])
+            # In a production app, you might query the user from the DB here:
+            # current_user = db.query(User).filter(User.id == data["user_id"]).first()
+            # But for simple stateless auth, the token data is enough.
+        except Exception:
+            return jsonify({"error": "Token is invalid or expired"}), 401
+
+        return f(*args, **kwargs)
+
+    return decorated
+
+
+def send_otp_email(receiver_email, otp_code):
+    sender_email = "insightslookup@gmail.com"
+    sender_password = "chxh lmbs fuhb ertp"
+
+    if not sender_email or not sender_password:
+        print("SMTP_EMAIL or SMTP_PASSWORD not set. Cannot send email.")
+        return False
+
+    message = MIMEMultipart("alternative")
+    message["Subject"] = f"Your Insights Login Code: {otp_code}"
+    message["From"] = sender_email
+    message["To"] = receiver_email
+
+    text = f"Your one-time password is: {otp_code} It will expire in 10 minutes."
+    html = f"""
+    <html>
+      <body style="font-family: sans-serif; color: #1C1917;">
+        <div style="max-width: 400px; padding: 20px; border: 1px solid #E7E5E4; border-radius: 12px;">
+          <h2 style="font-family: 'Playfair Display', serif; color: #1C1917;">Insights Login</h2>
+          <p>Your one-time password is:</p>
+          <div style="background-color: #F5F5F4; padding: 15px; border-radius: 8px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 4px;">
+            {otp_code}
+          </div>
+          <p style="color: #78716C; font-size: 14px; margin-top: 20px;">This code will expire in 10 minutes.</p>
+        </div>
+      </body>
+    </html>
+    """
+    message.attach(MIMEText(text, "plain"))
+    message.attach(MIMEText(html, "html"))
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, receiver_email, message.as_string())
+        return True
+    except Exception as e:
+        print(f"Error sending email: {e}")
+        return False
+
+
+@app.post("/request-otp")
+@limiter.limit("5 per minute")
+def request_otp():
+    """
+    POST /request-otp
+    Payload: {"email": "..."}
+    """
+    data = request.json
+    email = data.get("email")
+    if not email:
+        return jsonify({"error": "Email is required"}), 400
+
+    for db in get_db():
+        # Check for existing OTP request
+        existing_otp = db.query(OTP).filter(OTP.email == email).first()
+        now = datetime.now(timezone.utc)
+
+        if existing_otp:
+            # If the last attempt was over an hour ago OR the current OTP is expired, 
+            # we can consider resetting the resend count to allow a fresh start.
+            is_expired = existing_otp.expires_at and now > existing_otp.expires_at
+            was_long_ago = existing_otp.last_sent_at and now > existing_otp.last_sent_at + timedelta(hours=1)
+            
+            if was_long_ago or is_expired:
+                existing_otp.resend_count = 0
+
+            # Rule: OTP resend allowed after 60 sec
+            if existing_otp.last_sent_at and now < existing_otp.last_sent_at + timedelta(seconds=60):
+                seconds_left = int((existing_otp.last_sent_at + timedelta(seconds=60) - now).total_seconds())
+                return jsonify({"error": f"Please wait {seconds_left} seconds before resending"}), 429
+            
+            # Rule: Max resend = 5 times
+            if existing_otp.resend_count >= 5:
+                return jsonify({"error": "Max resend limit reached. Try again later after an hour."}), 429
+            
+            # Update existing OTP
+            code = f"{random.randint(100000, 999999)}"
+            existing_otp.code = code
+            existing_otp.resend_count += 1
+            existing_otp.last_sent_at = now
+            existing_otp.expires_at = now + timedelta(minutes=10)
+        else:
+            # Create new OTP entry
+            code = f"{random.randint(100000, 999999)}"
+            new_otp = OTP(
+                email=email,
+                code=code,
+                expires_at=now + timedelta(minutes=10),
+                last_sent_at=now,
+                resend_count=0
+            )
+            db.add(new_otp)
+        
+        db.commit()
+        # In a real app, send actual email. For now, we print to console.
+        print(f"DEBUG: OTP for {email} is {code}")
+        
+        # Send actual SMTP email
+        sent = send_otp_email(email, code)
+        if not sent:
+             # If email fails but we have no credentials, we still log for debug
+             # but maybe notify the client that delivery might be delayed if we expect it to work.
+             pass
+
+        return jsonify({"message": "OTP sent successfully"}), 200
+
+
+@app.post("/verify-otp")
+@limiter.limit("5 per minute")
+def verify_otp():
+    """
+    POST /verify-otp
+    Payload: {"email": "...", "code": "..."}
+    """
+    data = request.json
+    email = data.get("email")
+    code = data.get("code")
+
+    if not email or not code:
+        return jsonify({"error": "Email and code are required"}), 400
+
+    for db in get_db():
+        otp_entry = db.query(OTP).filter(OTP.email == email, OTP.code == code).first()
+        
+        if not otp_entry:
+            return jsonify({"error": "Invalid OTP"}), 400
+        
+        if otp_entry.expires_at < datetime.now(timezone.utc):
+            return jsonify({"error": "OTP expired"}), 400
+
+        # Success! Clear OTP
+        db.delete(otp_entry)
+
+        # Handle user creation/lookup
+        user = db.query(User).filter(User.email == email).first()
+        if not user:
+            # Rules: Profile name = text before “@”
+            name = email.split("@")[0]
+            user = User(email=email, name=name)
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        
+        db.commit()
+        
+        # Issue JWT Token
+        token = jwt.encode({
+            "user_id": user.id,
+            "email": user.email,
+            "exp": datetime.now(timezone.utc) + timedelta(days=7)
+        }, JWT_SECRET_KEY, algorithm="HS256")
+
+        response = jsonify({
+            "message": "Logged in successfully",
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "name": user.name
+            }
+        })
+        
+        # Set token in an HttpOnly cookie
+        response.set_cookie(
+            "auth_token",
+            token,
+            httponly=True,
+            secure=False,  # Set to True in production (HTTPS)
+            samesite="Lax",
+            max_age=7 * 24 * 60 * 60  # 7 days
+        )
+        
+        return response, 200
+
+
+@app.post("/logout")
+def logout():
+    response = jsonify({"message": "Logged out successfully"})
+    response.set_cookie("auth_token", "", expires=0)
+    return response, 200
 
 
 def parse_date(date_str: str | None):
@@ -87,6 +311,7 @@ def search_organizations():
 
 
 @app.get("/org-transitions")
+@token_required
 def org_transitions():
     """
     GET /org-transitions?org_id=...&start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&hops=N
@@ -271,6 +496,7 @@ def org_transitions():
 
 
 @app.get("/employee-transitions")
+@token_required
 def employee_transitions():
     """
     GET /employee-transitions?source_org_id=...&dest_org_id=...&hop=N&start_date=...&end_date=...
@@ -461,6 +687,7 @@ def employee_transitions():
 
 
 @app.get("/alumni")
+@token_required
 def get_alumni():
     """
     GET /alumni?org_id=...&start_date=...&end_date=...

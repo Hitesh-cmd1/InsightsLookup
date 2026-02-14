@@ -5,17 +5,33 @@ import LandingPage from './components/LandingPage';
 import Dashboard from './components/Dashboard';
 import CompanyDetails from './components/CompanyDetails';
 import { Toaster } from 'sonner';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import AuthModal from './components/AuthModal';
+
+function GlobalAuthModal() {
+  const { isAuthModalOpen, closeLogin, authModalCallback } = useAuth();
+  return (
+    <AuthModal
+      isOpen={isAuthModalOpen}
+      onClose={closeLogin}
+      onSuccess={authModalCallback}
+    />
+  );
+}
 
 function App() {
   return (
     <div className="App">
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<LandingPage />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/company-details" element={<CompanyDetails />} />
-        </Routes>
-      </BrowserRouter>
+      <AuthProvider>
+        <BrowserRouter>
+          <GlobalAuthModal />
+          <Routes>
+            <Route path="/" element={<LandingPage />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/company-details" element={<CompanyDetails />} />
+          </Routes>
+        </BrowserRouter>
+      </AuthProvider>
       <Toaster position="top-center" richColors />
     </div>
   );

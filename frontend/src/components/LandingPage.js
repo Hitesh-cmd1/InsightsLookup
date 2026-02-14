@@ -1,15 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { motion } from 'framer-motion';
-import { Search, TrendingUp, Users, Briefcase, ArrowRight, Loader2 } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Search, TrendingUp, Users, Briefcase, ArrowRight, Loader2, LogOut, User as UserIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { searchOrganizations } from '../api/insights';
+import { useAuth } from '../context/AuthContext';
 
 const SUGGESTION_DEBOUNCE_MS = 300;
 const MIN_QUERY_LENGTH = 1;
 
 const LandingPage = () => {
   const navigate = useNavigate();
+  const { user, logout, openLogin } = useAuth();
+
   const [companyName, setCompanyName] = useState('');
   const [startYear, setStartYear] = useState('');
   const [endYear, setEndYear] = useState('');
@@ -19,6 +22,7 @@ const LandingPage = () => {
   const [suggestionsError, setSuggestionsError] = useState(null);
   const [selectedOrg, setSelectedOrg] = useState(null);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const suggestionRef = useRef(null);
 
   const currentYear = new Date().getFullYear();
@@ -77,27 +81,10 @@ const LandingPage = () => {
     setSuggestionsError(null);
   };
 
-  const handleSearch = async (e) => {
-    e.preventDefault();
-
-    if (!companyName.trim()) {
-      toast.error('Please enter a company name');
-      return;
-    }
-
-    if (!startYear || !endYear) {
-      toast.error('Please select both start and end years');
-      return;
-    }
-
-    if (parseInt(startYear) > parseInt(endYear)) {
-      toast.error('Start year cannot be after end year');
-      return;
-    }
-
+  const performSearch = async (forceResolved = null) => {
     setSearching(true);
     try {
-      let resolved = selectedOrg;
+      let resolved = forceResolved || selectedOrg;
       if (!resolved) {
         const orgs = await searchOrganizations(companyName);
         if (!orgs || orgs.length === 0) {
@@ -115,7 +102,7 @@ const LandingPage = () => {
       };
       try {
         sessionStorage.setItem('insightsDashboardState', JSON.stringify(state));
-      } catch (_) {}
+      } catch (_) { }
       toast.success(`Loading alumni data for ${resolved.name} (${startYear}-${endYear})`);
       navigate('/dashboard', { state });
     } catch (err) {
@@ -123,6 +110,32 @@ const LandingPage = () => {
     } finally {
       setSearching(false);
     }
+  };
+
+  const handleSearch = async (e) => {
+    if (e) e.preventDefault();
+
+    if (!companyName.trim()) {
+      toast.error('Please enter a company name');
+      return;
+    }
+
+    if (!startYear || !endYear) {
+      toast.error('Please select both start and end years');
+      return;
+    }
+
+    if (parseInt(startYear) > parseInt(endYear)) {
+      toast.error('Start year cannot be after end year');
+      return;
+    }
+
+    if (!user) {
+      openLogin(() => performSearch());
+      return;
+    }
+
+    await performSearch();
   };
 
   const containerVariants = {
@@ -150,17 +163,83 @@ const LandingPage = () => {
 
   return (
     <div className="min-h-screen bg-[#FAFAF9]">
+
+      {/* Header */}
+      <header className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-6 sm:px-12 py-6">
+        <div
+          className="flex items-center gap-2 cursor-pointer"
+          onClick={() => navigate('/')}
+        >
+          <div className="w-8 h-8 bg-[#1C1917] rounded-lg flex items-center justify-center">
+            <TrendingUp className="w-5 h-5 text-white" />
+          </div>
+          <span className="text-xl font-bold text-[#1C1917]" style={{ fontFamily: "'Playfair Display', serif" }}>
+            Insights
+          </span>
+        </div>
+
+        <div className="relative">
+          {user ? (
+            <div className="flex items-center gap-4">
+              <button
+                onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)}
+                className="w-10 h-10 bg-[#1C1917]/5 hover:bg-[#1C1917]/10 rounded-full flex items-center justify-center transition-all"
+                data-testid="profile-icon"
+              >
+                <UserIcon className="w-5 h-5 text-[#1C1917]" />
+              </button>
+
+              <AnimatePresence>
+                {isProfileMenuOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    className="absolute right-0 top-full mt-2 w-48 bg-white border border-[#E7E5E4] rounded-xl shadow-lg p-2 z-40"
+                  >
+                    <div className="px-3 py-2 border-b border-[#E7E5E4] mb-1">
+                      <p className="text-xs text-[#78716C]">Signed in as</p>
+                      <p className="text-sm font-semibold text-[#1C1917] truncate">{user.name}</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        logout();
+                        setIsProfileMenuOpen(false);
+                        navigate('/');
+                        toast.success('Logged out successfully');
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[#EF4444] hover:bg-[#EF4444]/5 rounded-lg transition-all"
+                    >
+                      <LogOut className="w-4 h-4" />
+                      Logout
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          ) : (
+            <button
+              onClick={() => openLogin()}
+              className="px-6 py-2 bg-[#1C1917]/5 hover:bg-[#1C1917] hover:text-white rounded-full text-sm font-semibold transition-all"
+              data-testid="login-button"
+            >
+              Login
+            </button>
+          )}
+        </div>
+      </header>
+
       {/* Hero Section */}
       <div className="relative overflow-hidden">
         {/* Background texture */}
-        <div 
+        <div
           className="absolute inset-0 opacity-[0.15] bg-cover bg-center"
           style={{
             backgroundImage: 'url(https://images.unsplash.com/photo-1605764948243-24558b81a2c7?crop=entropy&cs=srgb&fm=jpg&q=85)',
             filter: 'brightness(1.2)'
           }}
         />
-        
+
         <div className="relative max-w-[1400px] mx-auto px-6 sm:px-12 py-24 sm:py-32">
           <motion.div
             variants={containerVariants}
@@ -170,7 +249,7 @@ const LandingPage = () => {
           >
             {/* Heading */}
             <motion.div variants={itemVariants} className="space-y-6 max-w-4xl">
-              <h1 
+              <h1
                 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-[#1C1917]"
                 style={{ fontFamily: "'Playfair Display', serif" }}
               >
@@ -179,17 +258,17 @@ const LandingPage = () => {
                 <span className="text-[#F59E0B]">Career Journey</span>
               </h1>
               <p className="text-base sm:text-lg text-[#78716C] max-w-2xl mx-auto leading-relaxed">
-                Discover where your alumni network is heading. Uncover career transitions, 
+                Discover where your alumni network is heading. Uncover career transitions,
                 identify hiring patterns, and connect with former colleagues navigating similar paths.
               </p>
             </motion.div>
 
             {/* Search Form with Glassmorphism */}
-            <motion.div 
+            <motion.div
               variants={itemVariants}
               className="w-full max-w-3xl"
             >
-              <form 
+              <form
                 onSubmit={handleSearch}
                 className="bg-white/70 backdrop-blur-xl border border-white/40 rounded-3xl p-8 sm:p-12"
                 style={{ boxShadow: '0 8px 30px rgb(0,0,0,0.04)' }}
@@ -198,8 +277,8 @@ const LandingPage = () => {
                 <div className="space-y-6">
                   {/* Company Name Input with suggestions */}
                   <div className="space-y-2" ref={suggestionRef}>
-                    <label 
-                      htmlFor="company-name" 
+                    <label
+                      htmlFor="company-name"
                       className="block text-sm font-medium text-[#1C1917] text-left"
                     >
                       Company Name
@@ -258,8 +337,8 @@ const LandingPage = () => {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                     {/* Start Year */}
                     <div className="space-y-2">
-                      <label 
-                        htmlFor="start-year" 
+                      <label
+                        htmlFor="start-year"
                         className="block text-sm font-medium text-[#1C1917] text-left"
                       >
                         From Year
@@ -280,8 +359,8 @@ const LandingPage = () => {
 
                     {/* End Year */}
                     <div className="space-y-2">
-                      <label 
-                        htmlFor="end-year" 
+                      <label
+                        htmlFor="end-year"
                         className="block text-sm font-medium text-[#1C1917] text-left"
                       >
                         To Year
@@ -346,14 +425,14 @@ const LandingPage = () => {
               <div className="w-12 h-12 bg-[#F59E0B]/10 rounded-xl flex items-center justify-center mb-6">
                 <TrendingUp className="w-6 h-6 text-[#F59E0B]" />
               </div>
-              <h3 
+              <h3
                 className="text-2xl font-bold text-[#1C1917] mb-4"
                 style={{ fontFamily: "'Playfair Display', serif" }}
               >
                 Career Transitions
               </h3>
               <p className="text-[#78716C] leading-relaxed">
-                Visualize where your alumni are moving. Identify trending companies, 
+                Visualize where your alumni are moving. Identify trending companies,
                 roles, and industries in your network.
               </p>
             </motion.div>
@@ -368,14 +447,14 @@ const LandingPage = () => {
               <div className="w-12 h-12 bg-[#10B981]/10 rounded-xl flex items-center justify-center mb-6">
                 <Briefcase className="w-6 h-6 text-[#10B981]" />
               </div>
-              <h3 
+              <h3
                 className="text-2xl font-bold text-[#1C1917] mb-4"
                 style={{ fontFamily: "'Playfair Display', serif" }}
               >
                 Opportunity Insights
               </h3>
               <p className="text-[#78716C] leading-relaxed">
-                Discover which companies are actively hiring from your network. 
+                Discover which companies are actively hiring from your network.
                 Optimize your job search with data-driven recommendations.
               </p>
             </motion.div>
@@ -390,14 +469,14 @@ const LandingPage = () => {
               <div className="w-12 h-12 bg-[#3B82F6]/10 rounded-xl flex items-center justify-center mb-6">
                 <Users className="w-6 h-6 text-[#3B82F6]" />
               </div>
-              <h3 
+              <h3
                 className="text-2xl font-bold text-[#1C1917] mb-4"
                 style={{ fontFamily: "'Playfair Display', serif" }}
               >
                 Network Intelligence
               </h3>
               <p className="text-[#78716C] leading-relaxed">
-                Find colleagues who've made similar career moves. Get introductions, 
+                Find colleagues who've made similar career moves. Get introductions,
                 advice, and insider perspectives from your extended network.
               </p>
             </motion.div>

@@ -1,5 +1,8 @@
 import os
 from datetime import date
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from sqlalchemy import (
     create_engine,
@@ -9,8 +12,10 @@ from sqlalchemy import (
     ForeignKey,
     Date,
     Text,
+    DateTime,
     UniqueConstraint,
 )
+from sqlalchemy.sql import func
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, scoped_session
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -33,6 +38,27 @@ SessionLocal = scoped_session(
 
 
 Base = declarative_base()
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, nullable=False, index=True)
+    name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class OTP(Base):
+    __tablename__ = "otps"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, nullable=False, index=True)
+    code = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    resend_count = Column(Integer, default=0)
+    last_sent_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class Employee(Base):
@@ -132,5 +158,7 @@ __all__ = [
     "School",
     "Experience",
     "Education",
+    "User",
+    "OTP",
 ]
 

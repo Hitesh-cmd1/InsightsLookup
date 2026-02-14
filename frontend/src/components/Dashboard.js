@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { Search, X, ExternalLink, Loader2 } from 'lucide-react';
+import { Search, X, ExternalLink, Loader2, LogOut, User as UserIcon, TrendingUp } from 'lucide-react';
+import { AnimatePresence } from 'framer-motion';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { getOrgTransitions, getEmployeeTransitions, getAlumni } from '../api/insights';
+import { useAuth } from '../context/AuthContext';
 
 /**
  * Transform API /org-transitions response into two sets of company cards:
@@ -110,6 +112,7 @@ function mapTransitions(apiResult) {
 const Dashboard = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { user, openLogin, loading: authLoading } = useAuth();
   const stateFromRoute = location.state || {};
   const stateFromStorage = (() => {
     try {
@@ -143,211 +146,9 @@ const Dashboard = () => {
   const [contextRole, setContextRole] = useState(stateFromStorage.role || '');
   const [contextApplying, setContextApplying] = useState(false);
   const [highlightedOrgIds, setHighlightedOrgIds] = useState(new Set());
-
-  // Fallback mock data only when no org context (e.g. direct visit to /dashboard)
-  const mockCompanies = useMemo(() => [
-    {
-      rank: 1,
-      name: 'Amazon',
-      people: 8,
-      recent: 2024,
-      transitions: [
-        { moves: 1, count: 5 },
-        { moves: 2, count: 1 },
-        { moves: 5, count: 2 },
-        { moves: 11, count: 1 }
-      ],
-      years: [2024, 2022, 2016, 2014]
-    },
-    {
-      rank: 2,
-      name: 'Routematic',
-      people: 5,
-      recent: 2025,
-      transitions: [
-        { moves: 1, count: 3 },
-        { moves: 2, count: 1 },
-        { moves: 7, count: 1 }
-      ],
-      years: [2025, 2022, 2016]
-    },
-    {
-      rank: 3,
-      name: 'Cisco',
-      people: 4,
-      recent: 2025,
-      transitions: [
-        { moves: 1, count: 3 },
-        { moves: 2, count: 1 }
-      ],
-      years: [2025, 2024]
-    },
-    {
-      rank: 4,
-      name: 'Capillary Technologies',
-      people: 4,
-      recent: 2024,
-      transitions: [
-        { moves: 2, count: 3 },
-        { moves: 9, count: 1 }
-      ],
-      years: [2024, 2021, 2014]
-    },
-    {
-      rank: 5,
-      name: 'Rupifi',
-      people: 4,
-      recent: 2023,
-      transitions: [
-        { moves: 2, count: 2 },
-        { moves: 3, count: 2 }
-      ],
-      years: [2023, 2022, 2020]
-    },
-    {
-      rank: 6,
-      name: 'GoTo Group',
-      people: 3,
-      recent: 2025,
-      transitions: [
-        { moves: 1, count: 2 },
-        { moves: 2, count: 1 }
-      ],
-      years: [2025, 2024, 2022]
-    },
-    {
-      rank: 7,
-      name: 'Tekion Corp',
-      people: 3,
-      recent: 2025,
-      transitions: [
-        { moves: 1, count: 2 },
-        { moves: 3, count: 1 }
-      ],
-      years: [2025, 2023]
-    },
-    {
-      rank: 8,
-      name: 'Wipro',
-      people: 3,
-      recent: 2025,
-      transitions: [
-        { moves: 1, count: 2 },
-        { moves: 2, count: 1 }
-      ],
-      years: [2025, 2021]
-    },
-    {
-      rank: 9,
-      name: 'Delhivery',
-      people: 3,
-      recent: 2025,
-      transitions: [
-        { moves: 1, count: 2 },
-        { moves: 3, count: 1 }
-      ],
-      years: [2025, 2020]
-    },
-    {
-      rank: 10,
-      name: 'Paytm',
-      people: 3,
-      recent: 2025,
-      transitions: [
-        { moves: 1, count: 3 }
-      ],
-      years: [2025, 2021]
-    },
-    {
-      rank: 11,
-      name: 'Freight Tiger',
-      people: 3,
-      recent: 2024,
-      transitions: [
-        { moves: 1, count: 2 },
-        { moves: 3, count: 1 }
-      ],
-      years: [2024, 2021, 2018]
-    },
-    {
-      rank: 12,
-      name: 'ShareChat',
-      people: 3,
-      recent: 2022,
-      transitions: [
-        { moves: 1, count: 1 },
-        { moves: 2, count: 1 },
-        { moves: 4, count: 1 }
-      ],
-      years: [2022, 2021]
-    },
-    {
-      rank: 13,
-      name: 'Freelance',
-      people: 3,
-      recent: 2021,
-      transitions: [
-        { moves: 3, count: 2 },
-        { moves: 4, count: 1 }
-      ],
-      years: [2021, 2020, 2018]
-    },
-    {
-      rank: 14,
-      name: 'Livspace',
-      people: 3,
-      recent: 2021,
-      transitions: [
-        { moves: 2, count: 1 },
-        { moves: 3, count: 1 },
-        { moves: 8, count: 1 }
-      ],
-      years: [2021, 2019]
-    },
-    {
-      rank: 15,
-      name: 'TiLa',
-      people: 3,
-      recent: 2021,
-      transitions: [
-        { moves: 2, count: 2 },
-        { moves: 5, count: 1 }
-      ],
-      years: [2021, 2020, 2019]
-    },
-    {
-      rank: 16,
-      name: 'Nuance Communications',
-      people: 3,
-      recent: 2018,
-      transitions: [
-        { moves: 4, count: 2 },
-        { moves: 8, count: 1 }
-      ],
-      years: [2018, 2016]
-    },
-    {
-      rank: 17,
-      name: 'VTT Mobility Private Limited',
-      people: 2,
-      recent: 2026,
-      transitions: [
-        { moves: 1, count: 2 }
-      ],
-      years: [2026]
-    },
-    {
-      rank: 18,
-      name: 'Swiggy',
-      people: 2,
-      recent: 2025,
-      transitions: [
-        { moves: 2, count: 2 }
-      ],
-      years: [2025, 2024]
-    }
-  ], []);
-
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const { logout } = useAuth();
+  // Removed long mockCompanies list
   const years = Array.from({ length: 50 }, (_, i) => new Date().getFullYear() - i);
 
   const clearAllFilters = () => {
@@ -367,12 +168,21 @@ const Dashboard = () => {
     const startYear = searchParams.startYear;
     const endYear = searchParams.endYear;
 
+    if (authLoading) return;
+
+    if (!user) {
+      openLogin();
+      return;
+    }
+
     if (!orgId) {
-      setCompaniesFirst(mockCompanies);
+      setCompaniesFirst([]);
       setCompaniesSecond([]);
-      setTotalAlumni(493);
+      setTotalAlumni(0);
       setLoading(false);
-      setError(null);
+      setError('Please select an organization to view insights');
+      // Proactively navigate home if no context
+      if (!location.state) navigate('/');
       return;
     }
 
@@ -411,7 +221,7 @@ const Dashboard = () => {
         setTotalAlumni(0);
       })
       .finally(() => setLoading(false));
-  }, [searchParams.orgId, searchParams.startYear, searchParams.endYear, contextRole, mockCompanies]);
+  }, [searchParams.orgId, searchParams.startYear, searchParams.endYear, contextRole, user, openLogin, authLoading]);
 
   // Fetch alumni when the tab is active
   useEffect(() => {
@@ -542,17 +352,32 @@ const Dashboard = () => {
     }
   };
 
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-[#FAFAF9] flex items-center justify-center">
+        <Loader2 className="w-10 h-10 text-[#3B82F6] animate-spin" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#FAFAF9]">
       {/* Header */}
       <header className="bg-white border-b border-[#E7E5E4]">
         <div className="max-w-[1600px] mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-[#3B82F6] rounded-lg flex items-center justify-center">
-              <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
+            <div
+              className="flex items-center gap-2 cursor-pointer"
+              onClick={() => navigate('/')}
+            >
+              <div className="w-8 h-8 bg-[#1C1917] rounded-lg flex items-center justify-center">
+                <TrendingUp className="w-5 h-5 text-white" />
+              </div>
+              <span className="text-xl font-bold text-[#1C1917]" style={{ fontFamily: "'Playfair Display', serif" }}>
+                Insights
+              </span>
             </div>
+            <div className="h-8 w-px bg-[#E7E5E4] mx-2" />
             <div>
               <h1
                 className="text-xl font-bold text-[#1C1917] cursor-pointer hover:text-[#3B82F6] transition-colors"
@@ -569,12 +394,59 @@ const Dashboard = () => {
               )}
             </div>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-6">
             <div className="text-right">
               <p className="text-sm text-[#78716C]">Total Alumni</p>
               <p className="text-2xl font-bold text-[#1C1917]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
                 {totalAlumni}
               </p>
+            </div>
+
+            <div className="relative">
+              {user ? (
+                <div className="flex items-center gap-4">
+                  <button
+                    onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)}
+                    className="w-10 h-10 bg-[#1C1917]/5 hover:bg-[#1C1917]/10 rounded-full flex items-center justify-center transition-all"
+                  >
+                    <UserIcon className="w-5 h-5 text-[#1C1917]" />
+                  </button>
+
+                  <AnimatePresence>
+                    {isProfileMenuOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                        className="absolute right-0 top-full mt-2 w-48 bg-white border border-[#E7E5E4] rounded-xl shadow-lg p-2 z-40"
+                      >
+                        <div className="px-3 py-2 border-b border-[#E7E5E4] mb-1">
+                          <p className="text-xs text-[#78716C]">Signed in as</p>
+                          <p className="text-sm font-semibold text-[#1C1917] truncate">{user.name}</p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            logout();
+                            setIsProfileMenuOpen(false);
+                            navigate('/');
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[#EF4444] hover:bg-[#EF4444]/5 rounded-lg transition-all"
+                        >
+                          <LogOut className="w-4 h-4" />
+                          Logout
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              ) : (
+                <button
+                  onClick={() => openLogin()}
+                  className="px-6 py-2 bg-[#1C1917]/5 hover:bg-[#1C1917] hover:text-white rounded-full text-sm font-semibold transition-all"
+                >
+                  Login
+                </button>
+              )}
             </div>
           </div>
         </div>
