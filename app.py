@@ -238,7 +238,8 @@ def verify_otp():
             httponly=True,
             secure=False,  # Set to True in production (HTTPS)
             samesite="Lax",
-            max_age=7 * 24 * 60 * 60  # 7 days
+            max_age=7 * 24 * 60 * 60,  # 7 days
+            path="/"
         )
         
         return response, 200
@@ -247,7 +248,7 @@ def verify_otp():
 @app.post("/logout")
 def logout():
     response = jsonify({"message": "Logged out successfully"})
-    response.set_cookie("auth_token", "", expires=0)
+    response.set_cookie("auth_token", "", expires=0, path="/", httponly=True)
     return response, 200
 
 
