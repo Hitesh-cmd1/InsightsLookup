@@ -15,6 +15,7 @@ load_dotenv()
 from flask import Flask, jsonify, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from sqlalchemy import func
 
 from db.models import get_db, init_db, Organization, Experience, Role, User, OTP
 
@@ -265,9 +266,10 @@ def search_organizations():
 
     Response:
     [
-      {"id": 1, "name": "Acme Corp"},
+      {"id": 1, "name": "Acme Corp", "alumni_count": 42},
       ...
     ]
+    alumni_count = distinct employees who have left this org (experience with end_date set).
     """
     org_name = request.args.get("org_name", type=str)
     if not org_name:
@@ -289,11 +291,31 @@ def search_organizations():
             .all()
         )
 
+        if not matches:
+            return jsonify([])
+
+        org_ids = [org.id for org in matches]
+        # Alumni = distinct employees who have left this org (experience with end_date set)
+        count_rows = (
+            db.query(
+                Experience.organization_id,
+                func.count(func.distinct(Experience.employee_id)),
+            )
+            .filter(
+                Experience.organization_id.in_(org_ids),
+                Experience.end_date.isnot(None),
+            )
+            .group_by(Experience.organization_id)
+            .all()
+        )
+        alumni_count_by_org = {org_id: count for org_id, count in count_rows}
+
         return jsonify(
             [
                 {
                     "id": org.id,
                     "name": org.name,
+                    "alumni_count": alumni_count_by_org.get(org.id, 0),
                 }
                 for org in matches
             ]
@@ -410,6 +432,7 @@ def org_transitions():
             subsequent_jobs.sort(key=lambda x: (x.start_date, x.id))
 
             # Collapse consecutive jobs at same org into a single 'hop'
+            # (internal role changes at the same company do not count as separate hops)
             unique_hops = []
             for job in subsequent_jobs:
                 if not unique_hops or job.organization_id != unique_hops[-1]["org_id"]:
@@ -423,8 +446,14 @@ def org_transitions():
                     if job.role_id:
                         unique_hops[-1]["role_ids"].add(job.role_id)
 
+            # Only count company changes: drop leading hops that are same as source org
+            # (e.g. A Role1 -> A Role2 -> B: A->A is internal, so first transition is A->B = hop 1)
+            effective_hops = list(unique_hops)
+            while effective_hops and effective_hops[0]["org_id"] == org_id:
+                effective_hops.pop(0)
+
             # Count hops (up to limit)
-            for hop_idx, h_data in enumerate(unique_hops[:hops], start=1):
+            for hop_idx, h_data in enumerate(effective_hops[:hops], start=1):
                 if hop_idx not in hop_counts:
                     hop_counts[hop_idx] = {}
                 org_id_dest = h_data["org_id"]
@@ -591,24 +620,50 @@ def employee_transitions():
             # Sort by start date
             subsequent_jobs.sort(key=lambda x: (x.start_date, x.id))
 
-            # Collapse consecutive jobs at same org into a single 'hop'
-            unique_hops = []
+            # Group consecutive jobs at same org (internal role changes don't count as hops)
+            groups = []
             for job in subsequent_jobs:
-                if not unique_hops or job.organization_id != unique_hops[-1].organization_id:
-                    unique_hops.append(job)
+                if not groups or job.organization_id != groups[-1][0].organization_id:
+                    groups.append([job])
+                else:
+                    groups[-1].append(job)
+
+            # Only count company changes: drop leading groups that are same as source org
+            effective_groups = list(groups)
+            while effective_groups and effective_groups[0][0].organization_id == source_org_id:
+                effective_groups.pop(0)
 
             # Check if the employee reached dest_org at exactly the specified hop
-            if hop <= len(unique_hops):
-                target_job = unique_hops[hop - 1]  # hop is 1-indexed
+            if hop <= len(effective_groups):
+                target_group = effective_groups[hop - 1]
+                target_job = target_group[0]
                 if target_job.organization_id == dest_org_id:
-                    # Build complete experience history in chronological order
+                    # Segment each experience for highlighting: source, internal_at_source, hop_1, hop_2, prior
+                    segment_by_exp_id = {}
+                    segment_by_exp_id[exit_stint.id] = "source"
+                    # Leading groups that match source org = internal (not counted as a hop)
+                    n_dropped = 0
+                    for grp in groups:
+                        if grp[0].organization_id == source_org_id:
+                            n_dropped += 1
+                        else:
+                            break
+                    for exp in (e for grp in groups[:n_dropped] for e in grp):
+                        segment_by_exp_id[exp.id] = "internal_at_source"
+                    for i, grp in enumerate(groups[n_dropped:]):
+                        for exp in grp:
+                            segment_by_exp_id[exp.id] = f"hop_{i + 1}"
+
+                    # Build complete experience history with transition_segment
                     history = []
                     for exp in emp_exps:
+                        seg = segment_by_exp_id.get(exp.id, "prior")
                         history.append({
                             "organization_id": exp.organization_id,
                             "role_id": exp.role_id,
                             "start_date": exp.start_date.isoformat() if exp.start_date else None,
                             "end_date": exp.end_date.isoformat() if exp.end_date else None,
+                            "transition_segment": seg,
                         })
                     
                     matching_employees.append({
@@ -756,7 +811,12 @@ def get_alumni():
                 if not path_jobs or job.organization_id != path_jobs[-1].organization_id:
                     path_jobs.append(job)
 
-            path = [org_name_by_id.get(j.organization_id, "Unknown") for j in path_jobs]
+            # Only count company changes: drop leading same as source (internal moves)
+            path_jobs_effective = list(path_jobs)
+            while path_jobs_effective and path_jobs_effective[0].organization_id == org_id:
+                path_jobs_effective.pop(0)
+
+            path = [org_name_by_id.get(j.organization_id, "Unknown") for j in path_jobs_effective]
 
             alumni_list.append({
                 "id": emp_id,

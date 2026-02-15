@@ -322,10 +322,13 @@ const LandingPage = () => {
                               key={org.id}
                               type="button"
                               onClick={() => handleSelectOrg(org)}
-                              className="w-full text-left px-4 py-3 hover:bg-[#F5F5F4] text-[#1C1917] border-b border-[#E7E5E4] last:border-b-0 first:rounded-t-lg last:rounded-b-lg transition-colors"
+                              className="w-full text-left px-4 py-3 hover:bg-[#F5F5F4] text-[#1C1917] border-b border-[#E7E5E4] last:border-b-0 first:rounded-t-lg last:rounded-b-lg transition-colors flex items-center justify-between gap-3"
                               data-testid={`suggestion-${org.id}`}
                             >
-                              {org.name}
+                              <span className="font-medium truncate">{org.name}</span>
+                              <span className="text-[#78716C] text-sm whitespace-nowrap shrink-0">
+                                {typeof org.alumni_count === 'number' ? `${org.alumni_count} alumni` : '—'}
+                              </span>
                             </button>
                           ))}
                         </div>

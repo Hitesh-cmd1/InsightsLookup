@@ -105,8 +105,9 @@ function mapTransitions(apiResult) {
 
   const firstHopCompanies = buildCardsForHop(1);
   const secondHopCompanies = buildCardsForHop(2);
+  const thirdHopCompanies = buildCardsForHop(3);
 
-  return { firstHopCompanies, secondHopCompanies };
+  return { firstHopCompanies, secondHopCompanies, thirdHopCompanies };
 }
 
 const Dashboard = () => {
@@ -136,6 +137,7 @@ const Dashboard = () => {
 
   const [companiesFirst, setCompaniesFirst] = useState([]);
   const [companiesSecond, setCompaniesSecond] = useState([]);
+  const [companiesThird, setCompaniesThird] = useState([]);
   const [alumni, setAlumni] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingAlumni, setLoadingAlumni] = useState(false);
@@ -178,6 +180,7 @@ const Dashboard = () => {
     if (!orgId) {
       setCompaniesFirst([]);
       setCompaniesSecond([]);
+      setCompaniesThird([]);
       setTotalAlumni(0);
       setLoading(false);
       setError('Please select an organization to view insights');
@@ -193,9 +196,10 @@ const Dashboard = () => {
     setError(null);
     getOrgTransitions(orgId, { startDate, endDate, hops: 3, role: contextRole })
       .then((data) => {
-        const { firstHopCompanies, secondHopCompanies } = mapTransitions(data);
+        const { firstHopCompanies, secondHopCompanies, thirdHopCompanies } = mapTransitions(data);
         setCompaniesFirst(firstHopCompanies);
         setCompaniesSecond(secondHopCompanies);
+        setCompaniesThird(thirdHopCompanies);
         // For the "Total Alumni" header, continue to use sum of 1st-hop people
         const total = firstHopCompanies.reduce((sum, c) => sum + (c.people || 0), 0);
         setTotalAlumni(total);
@@ -218,6 +222,7 @@ const Dashboard = () => {
         setError(err.message || 'Failed to load transitions');
         setCompaniesFirst([]);
         setCompaniesSecond([]);
+        setCompaniesThird([]);
         setTotalAlumni(0);
       })
       .finally(() => setLoading(false));
@@ -276,8 +281,16 @@ const Dashboard = () => {
     return next;
   };
 
-  const filteredCompaniesFirst = applyCommonFilters(companiesFirst);
-  const filteredCompaniesSecond = applyCommonFilters(companiesSecond);
+  // When a role is set, only show companies that hired into that role (role_match from API)
+  const filterByRoleMatch = (list) => {
+    const role = (contextRole || '').trim();
+    if (!role) return list;
+    return list.filter((c) => highlightedOrgIds.has(c.organizationId));
+  };
+
+  const filteredCompaniesFirst = filterByRoleMatch(applyCommonFilters(companiesFirst));
+  const filteredCompaniesSecond = filterByRoleMatch(applyCommonFilters(companiesSecond));
+  const filteredCompaniesThird = filterByRoleMatch(applyCommonFilters(companiesThird));
 
   const isOrgHighlighted = (orgId) => highlightedOrgIds.has(orgId);
 
@@ -328,9 +341,10 @@ const Dashboard = () => {
         role,
       });
 
-      const { firstHopCompanies, secondHopCompanies } = mapTransitions(data);
+      const { firstHopCompanies, secondHopCompanies, thirdHopCompanies } = mapTransitions(data);
       setCompaniesFirst(firstHopCompanies);
       setCompaniesSecond(secondHopCompanies);
+      setCompaniesThird(thirdHopCompanies);
 
       // Build a highlight set from any hop where the backend indicates
       // a role match (supports both `role_match` and `match` flags).
@@ -731,15 +745,20 @@ const Dashboard = () => {
                           </p>
                         </div>
                         <div>
+                          <p className="text-xs text-[#78716C] mb-1">People (other transitions):</p>
+                          <p className="text-xl font-bold text-[#1C1917]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+                            {company.otherHopsCount}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4 mb-4 pb-4 border-b border-[#E7E5E4]">
+                        <div>
                           <p className="text-xs text-[#78716C] mb-1">People (all transitions):</p>
                           <p className="text-xl font-bold text-[#1C1917]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
                             {company.totalPeople}
                           </p>
                         </div>
-                      </div>
-
-                      {/* Recent */}
-                      <div className="grid grid-cols-2 gap-4 mb-4 pb-4 border-b border-[#E7E5E4]">
                         <div>
                           <p className="text-xs text-[#78716C] mb-1">Recent:</p>
                           <p className="text-xl font-bold text-[#1C1917]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
@@ -842,6 +861,145 @@ const Dashboard = () => {
                       <div className="grid grid-cols-2 gap-4 mb-4 pb-4 border-b border-[#E7E5E4]">
                         <div>
                           <p className="text-xs text-[#78716C] mb-1">People (2nd transition):</p>
+                          <p
+                            className="text-xl font-bold text-[#1C1917]"
+                            style={{ fontFamily: "'JetBrains Mono', monospace" }}
+                          >
+                            {company.people}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-[#78716C] mb-1">People (other transitions):</p>
+                          <p
+                            className="text-xl font-bold text-[#1C1917]"
+                            style={{ fontFamily: "'JetBrains Mono', monospace" }}
+                          >
+                            {company.otherHopsCount}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4 mb-4 pb-4 border-b border-[#E7E5E4]">
+                        <div>
+                          <p className="text-xs text-[#78716C] mb-1">People (all transitions):</p>
+                          <p
+                            className="text-xl font-bold text-[#1C1917]"
+                            style={{ fontFamily: "'JetBrains Mono', monospace" }}
+                          >
+                            {company.totalPeople}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-[#78716C] mb-1">Recent:</p>
+                          <p
+                            className="text-xl font-bold text-[#1C1917]"
+                            style={{ fontFamily: "'JetBrains Mono', monospace" }}
+                          >
+                            {company.recent}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mb-4">
+                        <p className="text-xs font-medium text-[#78716C] mb-2">By transitions:</p>
+                        <div className="space-y-1">
+                          {(company.transitions || []).map((t, i) => (
+                            <div key={i} className="flex justify-between text-sm">
+                              <span className="text-[#78716C]">
+                                {t.moves} move{t.moves > 1 ? 's' : ''}:
+                              </span>
+                              <span className="font-semibold text-[#1C1917]">
+                                {t.count} people
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        {(company.years || []).map((year, i) => (
+                          <span
+                            key={i}
+                            className="px-3 py-1 bg-[#F5F5F4] text-[#1C1917] text-sm font-medium rounded-md"
+                            style={{ fontFamily: "'JetBrains Mono', monospace" }}
+                          >
+                            {year}
+                          </span>
+                        ))}
+                      </div>
+                    </motion.div>
+                  ))}
+                </motion.div>
+              </>
+            )}
+
+            {/* 3+ Transitions Section */}
+            {filteredCompaniesThird.length > 0 && (
+              <>
+                <div className="flex items-center justify-between mt-10 mb-6 bg-[#D1FAE5] px-6 py-4 rounded-lg">
+                  <h2 className="text-lg font-semibold text-[#1C1917]">
+                    3+ Transitions
+                  </h2>
+                  <span className="text-sm text-[#78716C]">
+                    {filteredCompaniesThird.length} companies
+                  </span>
+                </div>
+
+                <motion.div
+                  className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.5 }}
+                >
+                  {filteredCompaniesThird.map((company, index) => (
+                    <motion.div
+                      key={company.name ? `${company.name}-3rd-${index}` : `3rd-${index}`}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: index * 0.05, duration: 0.4 }}
+                      whileHover={{ y: -4 }}
+                      className={`bg-white border ${isOrgHighlighted(company.organizationId)
+                        ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100'
+                        : 'border-[#E7E5E4]'
+                        } rounded-xl p-6 hover:shadow-md transition-all cursor-pointer`}
+                      onClick={() =>
+                        navigate('/company-details', {
+                          state: {
+                            sourceOrgId: searchParams.orgId,
+                            destOrgId: company.organizationId,
+                            companyName: company.name,
+                            hop: 3,
+                            startYear: searchParams.startYear,
+                            endYear: searchParams.endYear,
+                            role: contextRole,
+                          },
+                        })
+                      }
+                    >
+                      <div className="inline-flex items-center justify-center bg-[#059669] text-white text-sm font-bold rounded px-2 py-1 mb-3">
+                        #{company.rank}
+                      </div>
+
+                      <div className="flex items-start gap-2 mb-4">
+                        <h3
+                          className="text-lg font-bold text-[#1C1917] flex-1"
+                          style={{ fontFamily: "'Playfair Display', serif" }}
+                        >
+                          {company.name}
+                        </h3>
+                        <a
+                          href={`https://google.com/search?q=${encodeURIComponent(company.name)}+careers`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <ExternalLink className="w-4 h-4 text-[#78716C] flex-shrink-0 cursor-pointer hover:text-[#3B82F6]" />
+                        </a>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4 mb-4 pb-4 border-b border-[#E7E5E4]">
+                        <div>
+                          <p className="text-xs text-[#78716C] mb-1">People (3+ transition):</p>
                           <p
                             className="text-xl font-bold text-[#1C1917]"
                             style={{ fontFamily: "'JetBrains Mono', monospace" }}

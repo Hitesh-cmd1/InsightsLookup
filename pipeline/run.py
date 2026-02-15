@@ -29,4 +29,4 @@ if __name__ == "__main__":
     end = int(args.end)
     while start < end:
         get_people(args.cookie, start, args.school_id, args.past_org, args.keyword)
-        start= start + 10
+        start= start + 3

@@ -38,7 +38,10 @@ def get_people(cookie, start=0,school_id=None, past_org=None, keyword=None):
     print(response)
     if response.status_code == 200:
         resp = response.json()
-        items =  resp["data"]["data"]["searchDashClustersByAll"]["elements"][0]["items"]
+        try:
+            items =  resp["data"]["data"]["searchDashClustersByAll"]["elements"][0]["items"]
+        except:
+            return
         profile_ids = []
         item_count = 0
         for item in items:
@@ -46,10 +49,12 @@ def get_people(cookie, start=0,school_id=None, past_org=None, keyword=None):
             profile_id = get_profile_id(profile)
             if profile_id:
                 profile_ids.append(profile_id)
+        print(profile_ids)
         if profile_ids:
             saved_profiles = db.query(Employee.profile_id).filter(Employee.profile_id.in_(profile_ids)).all()
             saved_profiles = [profile_id.profile_id for profile_id in saved_profiles]
             saved_profiles = set(saved_profiles)
+            print(saved_profiles)
             for profile_id in profile_ids:
                 item_count = item_count + 1
                 print(item_count+start)
