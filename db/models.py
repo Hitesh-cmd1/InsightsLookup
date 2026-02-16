@@ -46,6 +46,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, nullable=False, index=True)
     name = Column(String, nullable=True)
+    profile_id = Column(String, nullable=True)  # Supabase resume URL, set when user uploads resume later
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -134,6 +135,89 @@ class Education(Base):
     school = relationship("School", back_populates="educations")
 
 
+# --- True tables: user-generated data, linked via users.id only. No links to scraped tables. ---
+
+class TrueOrganization(Base):
+    __tablename__ = "true_organizations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False, unique=True)
+
+    experiences = relationship("TrueExperience", back_populates="organization")
+
+
+class TrueRole(Base):
+    __tablename__ = "true_roles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False, unique=True)
+
+    experiences = relationship("TrueExperience", back_populates="role")
+
+
+class TrueSchool(Base):
+    __tablename__ = "true_schools"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False, unique=True)
+
+    educations = relationship("TrueEducation", back_populates="school")
+
+
+class TrueExperience(Base):
+    __tablename__ = "true_experiences"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    organization_id = Column(Integer, ForeignKey("true_organizations.id"), nullable=True)
+    role_id = Column(Integer, ForeignKey("true_roles.id"), nullable=True)
+    start_date = Column(Date, nullable=True)
+    end_date = Column(Date, nullable=True)
+    duration_text = Column(Text, nullable=True)
+    address = Column(Text, nullable=True)
+
+    user = relationship("User", back_populates="true_experiences")
+    organization = relationship("TrueOrganization", back_populates="experiences")
+    role = relationship("TrueRole", back_populates="experiences")
+
+
+class TrueEducation(Base):
+    __tablename__ = "true_educations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    school_id = Column(Integer, ForeignKey("true_schools.id"), nullable=True)
+    degree = Column(String, nullable=True)
+    start_date = Column(Date, nullable=True)
+    end_date = Column(Date, nullable=True)
+
+    user = relationship("User", back_populates="true_educations")
+    school = relationship("TrueSchool", back_populates="educations")
+
+
+class TrueSkill(Base):
+    """One skill per row. Max 10 skills per user enforced in application."""
+    __tablename__ = "true_skills"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    skill = Column(String, nullable=False)
+
+    user = relationship("User", back_populates="true_skills")
+
+
+# Add reverse relationships on User for true_* tables
+User.true_experiences = relationship(
+    "TrueExperience", back_populates="user", cascade="all, delete-orphan"
+)
+User.true_educations = relationship(
+    "TrueEducation", back_populates="user", cascade="all, delete-orphan"
+)
+User.true_skills = relationship(
+    "TrueSkill", back_populates="user", cascade="all, delete-orphan"
+)
+
+
 def get_db():
     """FastAPI-style dependency helper if needed later."""
     db = SessionLocal()
@@ -160,5 +244,11 @@ __all__ = [
     "Education",
     "User",
     "OTP",
+    "TrueOrganization",
+    "TrueRole",
+    "TrueSchool",
+    "TrueExperience",
+    "TrueEducation",
+    "TrueSkill",
 ]
 
