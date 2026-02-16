@@ -75,7 +75,7 @@ const CompanyDetails = () => {
         setEmployees([]);
       })
       .finally(() => setLoading(false));
-  }, [sourceOrgId, destOrgId, hop, startYear, endYear, roleFilter, user, openLogin, authLoading]);
+  }, [sourceOrgId, destOrgId, hop, startYear, endYear, roleFilter, user, openLogin, authLoading, companyName]);
 
   const totalEmployees = employees.length;
 
