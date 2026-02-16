@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { searchOrganizations } from '../api/insights';
 import { useAuth } from '../context/AuthContext';
+import { trackCoreFeatureUsed, incrementActivationCounter } from '../analytics/mixpanel';
 
 const SUGGESTION_DEBOUNCE_MS = 300;
 const MIN_QUERY_LENGTH = 1;
@@ -103,6 +104,8 @@ const LandingPage = () => {
       try {
         sessionStorage.setItem('insightsDashboardState', JSON.stringify(state));
       } catch (_) { }
+      trackCoreFeatureUsed('company_search', { company_name: resolved.name, org_id: resolved.id, start_year: startYear, end_year: endYear });
+      incrementActivationCounter('company_searches');
       toast.success(`Loading alumni data for ${resolved.name} (${startYear}-${endYear})`);
       navigate('/dashboard', { state });
     } catch (err) {

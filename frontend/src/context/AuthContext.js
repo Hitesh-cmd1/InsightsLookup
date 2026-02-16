@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { logoutUser } from '../api/insights';
+import { identifyUser } from '../analytics/mixpanel';
 
 const AuthContext = createContext();
 
@@ -29,6 +30,7 @@ export const AuthProvider = ({ children }) => {
             localStorage.setItem('insights_token', token);
             sessionStorage.removeItem('insights_token'); // Cleanup old loc
         }
+        identifyUser(userData, { created_at: new Date().toISOString() });
     };
 
     const logout = async () => {

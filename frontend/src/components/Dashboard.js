@@ -5,6 +5,7 @@ import { AnimatePresence } from 'framer-motion';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { getOrgTransitions, getEmployeeTransitions, getAlumni } from '../api/insights';
 import { useAuth } from '../context/AuthContext';
+import { trackCoreFeatureUsed, incrementActivationCounter } from '../analytics/mixpanel';
 
 /**
  * Transform API /org-transitions response into two sets of company cards:
@@ -217,6 +218,7 @@ const Dashboard = () => {
           });
         }
         setHighlightedOrgIds(highlighted);
+        trackCoreFeatureUsed('hiring_pattern_view', { org_id: orgId, start_year: startYear, end_year: endYear, has_role_filter: !!contextRole });
       })
       .catch((err) => {
         setError(err.message || 'Failed to load transitions');
@@ -310,6 +312,10 @@ const Dashboard = () => {
 
   const applyRoleContext = async () => {
     const role = (contextRole || '').trim();
+
+    if (role && searchParams.orgId) {
+      incrementActivationCounter('role_filters_applied');
+    }
 
     // Save role to session storage for persistence
     try {
@@ -501,7 +507,11 @@ const Dashboard = () => {
             {/* Year Filter */}
             <select
               value={selectedYear}
-              onChange={(e) => setSelectedYear(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setSelectedYear(v);
+                if (v !== 'all') incrementActivationCounter('year_filter_applied');
+              }}
               className="px-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917] bg-white cursor-pointer"
               data-testid="year-filter"
             >
@@ -514,7 +524,11 @@ const Dashboard = () => {
             {/* Transitions Filter */}
             <select
               value={selectedTransition}
-              onChange={(e) => setSelectedTransition(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setSelectedTransition(v);
+                if (v !== 'all') incrementActivationCounter('transition_filter_applied');
+              }}
               className="px-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917] bg-white cursor-pointer"
               data-testid="transition-filter"
             >
@@ -527,7 +541,11 @@ const Dashboard = () => {
             {/* Status Filter */}
             <select
               value={selectedStatus}
-              onChange={(e) => setSelectedStatus(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setSelectedStatus(v);
+                if (v !== 'all') incrementActivationCounter('status_filter_applied');
+              }}
               className="px-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917] bg-white cursor-pointer"
               data-testid="status-filter"
             >
@@ -541,7 +559,10 @@ const Dashboard = () => {
               type="number"
               placeholder="Min transitions"
               value={minTransitions}
-              onChange={(e) => setMinTransitions(e.target.value)}
+              onChange={(e) => {
+                setMinTransitions(e.target.value);
+                if (e.target.value !== '') incrementActivationCounter('min_max_transitions_applied');
+              }}
               className="px-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917] w-32"
               data-testid="min-transitions-input"
             />
@@ -551,7 +572,10 @@ const Dashboard = () => {
               type="number"
               placeholder="Max transitions"
               value={maxTransitions}
-              onChange={(e) => setMaxTransitions(e.target.value)}
+              onChange={(e) => {
+                setMaxTransitions(e.target.value);
+                if (e.target.value !== '') incrementActivationCounter('min_max_transitions_applied');
+              }}
               className="px-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917] w-32"
               data-testid="max-transitions-input"
             />
@@ -570,7 +594,10 @@ const Dashboard = () => {
               No post-{searchParams.companyName || 'Company'} journey
             </label>
             <button
-              onClick={clearAllFilters}
+              onClick={() => {
+                incrementActivationCounter('clear_filters_clicks');
+                clearAllFilters();
+              }}
               className="ml-auto text-sm text-[#3B82F6] hover:underline"
               data-testid="clear-all-button"
             >
@@ -588,7 +615,10 @@ const Dashboard = () => {
         <div className="max-w-[1600px] mx-auto px-6">
           <div className="flex gap-8">
             <button
-              onClick={() => setActiveTab('company-pathways')}
+              onClick={() => {
+                if (activeTab !== 'company-pathways') incrementActivationCounter('tabs_switched');
+                setActiveTab('company-pathways');
+              }}
               className={`py-4 px-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'company-pathways'
                 ? 'border-[#3B82F6] text-[#3B82F6]'
                 : 'border-transparent text-[#78716C] hover:text-[#1C1917]'
@@ -598,7 +628,10 @@ const Dashboard = () => {
               Company Pathways
             </button>
             <button
-              onClick={() => setActiveTab('career-transitions')}
+              onClick={() => {
+                if (activeTab !== 'career-transitions') incrementActivationCounter('tabs_switched');
+                setActiveTab('career-transitions');
+              }}
               className={`py-4 px-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'career-transitions'
                 ? 'border-[#3B82F6] text-[#3B82F6]'
                 : 'border-transparent text-[#78716C] hover:text-[#1C1917]'
@@ -608,7 +641,10 @@ const Dashboard = () => {
               Career Transitions
             </button>
             <button
-              onClick={() => setActiveTab('alumni')}
+              onClick={() => {
+                if (activeTab !== 'alumni') incrementActivationCounter('tabs_switched');
+                setActiveTab('alumni');
+              }}
               className={`py-4 px-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'alumni'
                 ? 'border-[#3B82F6] text-[#3B82F6]'
                 : 'border-transparent text-[#78716C] hover:text-[#1C1917]'
@@ -618,7 +654,10 @@ const Dashboard = () => {
               Alumni ({totalAlumni})
             </button>
             <button
-              onClick={() => setActiveTab('statistics')}
+              onClick={() => {
+                if (activeTab !== 'statistics') incrementActivationCounter('tabs_switched');
+                setActiveTab('statistics');
+              }}
               className={`py-4 px-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'statistics'
                 ? 'border-[#3B82F6] text-[#3B82F6]'
                 : 'border-transparent text-[#78716C] hover:text-[#1C1917]'
@@ -678,7 +717,10 @@ const Dashboard = () => {
                         : 'border-[#E7E5E4]'
                         } rounded-xl p-6 hover:shadow-md transition-all cursor-pointer`}
                       data-testid={`company-card-${company.rank}`}
-                      onClick={() =>
+                      onClick={() => {
+                        incrementActivationCounter('company_card_clicks', false);
+                        incrementActivationCounter('company_cards_opened');
+                        trackCoreFeatureUsed('company_card_opened', { hop: 1, company_name: company.name, dest_org_id: company.organizationId });
                         navigate('/company-details', {
                           state: {
                             sourceOrgId: searchParams.orgId,
@@ -689,8 +731,8 @@ const Dashboard = () => {
                             endYear: searchParams.endYear,
                             role: contextRole,
                           },
-                        })
-                      }
+                        });
+                      }}
                     >
                       {/* Rank Badge */}
                       <div className="inline-flex items-center justify-center bg-[#3B82F6] text-white text-sm font-bold rounded px-2 py-1 mb-3">
@@ -823,7 +865,10 @@ const Dashboard = () => {
                       transition={{ delay: index * 0.05, duration: 0.4 }}
                       whileHover={{ y: -4 }}
                       className="bg-white border border-[#E7E5E4] rounded-xl p-6 hover:shadow-md transition-all cursor-pointer"
-                      onClick={() =>
+                      onClick={() => {
+                        incrementActivationCounter('company_card_clicks', false);
+                        incrementActivationCounter('company_cards_opened');
+                        trackCoreFeatureUsed('company_card_opened', { hop: 2, company_name: company.name, dest_org_id: company.organizationId });
                         navigate('/company-details', {
                           state: {
                             sourceOrgId: searchParams.orgId,
@@ -834,8 +879,8 @@ const Dashboard = () => {
                             endYear: searchParams.endYear,
                             role: contextRole,
                           },
-                        })
-                      }
+                        });
+                      }}
                     >
                       <div className="inline-flex items-center justify-center bg-[#A855F7] text-white text-sm font-bold rounded px-2 py-1 mb-3">
                         #{company.rank}
@@ -962,7 +1007,10 @@ const Dashboard = () => {
                         ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100'
                         : 'border-[#E7E5E4]'
                         } rounded-xl p-6 hover:shadow-md transition-all cursor-pointer`}
-                      onClick={() =>
+                      onClick={() => {
+                        incrementActivationCounter('company_card_clicks', false);
+                        incrementActivationCounter('company_cards_opened');
+                        trackCoreFeatureUsed('company_card_opened', { hop: 3, company_name: company.name, dest_org_id: company.organizationId });
                         navigate('/company-details', {
                           state: {
                             sourceOrgId: searchParams.orgId,
@@ -973,8 +1021,8 @@ const Dashboard = () => {
                             endYear: searchParams.endYear,
                             role: contextRole,
                           },
-                        })
-                      }
+                        });
+                      }}
                     >
                       <div className="inline-flex items-center justify-center bg-[#059669] text-white text-sm font-bold rounded px-2 py-1 mb-3">
                         #{company.rank}

@@ -210,6 +210,7 @@ def verify_otp():
 
         # Handle user creation/lookup
         user = db.query(User).filter(User.email == email).first()
+        is_new_user = False
         if not user:
             # Rules: Profile name = text before “@”
             name = email.split("@")[0]
@@ -217,9 +218,10 @@ def verify_otp():
             db.add(user)
             db.commit()
             db.refresh(user)
-        
+            is_new_user = True
+
         db.commit()
-        
+
         # Issue JWT Token
         token = jwt.encode({
             "user_id": user.id,
@@ -230,6 +232,7 @@ def verify_otp():
         return jsonify({
             "message": "Logged in successfully",
             "token": token,
+            "is_new_user": is_new_user,
             "user": {
                 "id": user.id,
                 "email": user.email,

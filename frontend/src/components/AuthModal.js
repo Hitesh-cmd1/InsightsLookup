@@ -4,6 +4,7 @@ import { X, Mail, ShieldCheck, ArrowRight, Loader2, RefreshCw } from 'lucide-rea
 import { requestOTP, verifyOTP } from '../api/insights';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
+import { trackLogin, trackSignupCompleted } from '../analytics/mixpanel';
 
 const AuthModal = ({ isOpen, onClose, onSuccess }) => {
     const { login } = useAuth();
@@ -77,6 +78,11 @@ const AuthModal = ({ isOpen, onClose, onSuccess }) => {
         setLoading(true);
         try {
             const data = await verifyOTP(email, otp);
+            if (data.is_new_user) {
+                trackSignupCompleted('email');
+            } else {
+                trackLogin();
+            }
             login(data.user, data.token);
             toast.success('Logged in successfully');
             onSuccess?.();

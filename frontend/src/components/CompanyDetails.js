@@ -4,6 +4,7 @@ import { Loader2, ArrowLeft } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { getEmployeeTransitions } from '../api/insights';
 import { useAuth } from '../context/AuthContext';
+import { trackCoreFeatureUsed } from '../analytics/mixpanel';
 import { TrendingUp, LogOut, User as UserIcon } from 'lucide-react';
 
 const CompanyDetails = () => {
@@ -61,6 +62,13 @@ const CompanyDetails = () => {
           return a.role_match ? -1 : 1;
         });
         setEmployees(list);
+        trackCoreFeatureUsed('transition_analysis', {
+          source_org_id: sourceOrgId,
+          dest_org_id: destOrgId,
+          company_name: companyName,
+          hop,
+          employee_count: list.length,
+        });
       })
       .catch((err) => {
         setError(err.message || 'Failed to load employee transitions');

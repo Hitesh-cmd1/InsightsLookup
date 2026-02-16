@@ -7,6 +7,7 @@ import CompanyDetails from './components/CompanyDetails';
 import { Toaster } from 'sonner';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import AuthModal from './components/AuthModal';
+import { AnalyticsTracker } from './analytics/AnalyticsTracker';
 
 function GlobalAuthModal() {
   const { isAuthModalOpen, closeLogin, authModalCallback } = useAuth();
@@ -24,6 +25,7 @@ function App() {
     <div className="App">
       <AuthProvider>
         <BrowserRouter>
+          <AnalyticsTracker />
           <GlobalAuthModal />
           <Routes>
             <Route path="/" element={<LandingPage />} />
