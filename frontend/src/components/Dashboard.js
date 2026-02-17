@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { Search, X, ExternalLink, Loader2, LogOut, User as UserIcon, TrendingUp } from 'lucide-react';
+import { Search, X, ExternalLink, Loader2, LogOut, User as UserIcon, TrendingUp, SlidersHorizontal } from 'lucide-react';
 import { AnimatePresence } from 'framer-motion';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { getOrgTransitions, getEmployeeTransitions, getAlumni } from '../api/insights';
+import { getOrgTransitions, getEmployeeTransitions, getAlumni, searchOrganizations } from '../api/insights';
 import { useAuth } from '../context/AuthContext';
 import { trackCoreFeatureUsed, incrementActivationCounter } from '../analytics/mixpanel';
+import { toast } from 'sonner';
 
 /**
  * Transform API /org-transitions response into two sets of company cards:
@@ -126,6 +127,11 @@ const Dashboard = () => {
   })();
   const searchParams = { ...stateFromStorage, ...stateFromRoute };
 
+  const [topCompanyName, setTopCompanyName] = useState(searchParams.companyName || '');
+  const [topStartYear, setTopStartYear] = useState(searchParams.startYear || '');
+  const [topEndYear, setTopEndYear] = useState(searchParams.endYear || '');
+  const [updatingOrgContext, setUpdatingOrgContext] = useState(false);
+
   const [searchName, setSearchName] = useState('');
   const [selectedYear, setSelectedYear] = useState('all');
   const [selectedTransition, setSelectedTransition] = useState('all');
@@ -154,6 +160,14 @@ const Dashboard = () => {
   // Removed long mockCompanies list
   const years = Array.from({ length: 50 }, (_, i) => new Date().getFullYear() - i);
 
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [companyScope, setCompanyScope] = useState('all');
+  const [companyRoleFilter, setCompanyRoleFilter] = useState('any');
+  const [companyTenureFilter, setCompanyTenureFilter] = useState('with-me');
+  const [collegeScope, setCollegeScope] = useState('all');
+  const [collegeDepartmentFilter, setCollegeDepartmentFilter] = useState('any');
+  const [collegeBatchFilter, setCollegeBatchFilter] = useState('exact');
+
   const clearAllFilters = () => {
     setSearchName('');
     setSelectedYear('all');
@@ -163,6 +177,55 @@ const Dashboard = () => {
     setMaxTransitions('');
     setNoPostJourney(false);
     setDataBusinessRoles(false);
+  };
+
+  const handleUpdateTopContext = async (e) => {
+    e?.preventDefault();
+
+    const company = (topCompanyName || '').trim();
+    if (!company) {
+      toast.error('Please enter a company name');
+      return;
+    }
+    if (!topStartYear || !topEndYear) {
+      toast.error('Please select both start and end years');
+      return;
+    }
+    if (parseInt(topStartYear, 10) > parseInt(topEndYear, 10)) {
+      toast.error('Start year cannot be after end year');
+      return;
+    }
+
+    setUpdatingOrgContext(true);
+    try {
+      const orgs = await searchOrganizations(company);
+      if (!orgs || orgs.length === 0) {
+        toast.error(`No organizations found for "${company}"`);
+        return;
+      }
+      const resolved = orgs[0];
+      const state = {
+        orgId: resolved.id,
+        companyName: resolved.name,
+        startYear: topStartYear,
+        endYear: topEndYear,
+      };
+      try {
+        sessionStorage.setItem('insightsDashboardState', JSON.stringify(state));
+      } catch (_) {}
+      trackCoreFeatureUsed('company_search_from_dashboard', {
+        company_name: resolved.name,
+        org_id: resolved.id,
+        start_year: topStartYear,
+        end_year: topEndYear,
+      });
+      incrementActivationCounter('company_searches');
+      navigate('/dashboard', { state });
+    } catch (err) {
+      toast.error(err.message || 'Failed to update company and year');
+    } finally {
+      setUpdatingOrgContext(false);
+    }
   };
 
   // Fetch org-transitions when we have orgId and date range
@@ -393,35 +456,15 @@ const Dashboard = () => {
               <div className="w-8 h-8 bg-[#1C1917] rounded-lg flex items-center justify-center">
                 <TrendingUp className="w-5 h-5 text-white" />
               </div>
-              <span className="text-xl font-bold text-[#1C1917]" style={{ fontFamily: "'Playfair Display', serif" }}>
+              <span
+                className="text-xl font-bold text-[#1C1917]"
+                style={{ fontFamily: "'Playfair Display', serif" }}
+              >
                 Insights
               </span>
             </div>
-            <div className="h-8 w-px bg-[#E7E5E4] mx-2" />
-            <div>
-              <h1
-                className="text-xl font-bold text-[#1C1917] cursor-pointer hover:text-[#3B82F6] transition-colors"
-                style={{ fontFamily: "'Playfair Display', serif" }}
-                onClick={() => navigate('/')}
-                data-testid="app-title"
-              >
-                {searchParams.companyName || 'Company'} Alumni Tracker
-              </h1>
-              {searchParams.startYear && searchParams.endYear && (
-                <p className="text-sm text-[#78716C]">
-                  {searchParams.startYear} - {searchParams.endYear}
-                </p>
-              )}
-            </div>
           </div>
           <div className="flex items-center gap-6">
-            <div className="text-right">
-              <p className="text-sm text-[#78716C]">Total Alumni</p>
-              <p className="text-2xl font-bold text-[#1C1917]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
-                {totalAlumni}
-              </p>
-            </div>
-
             <div className="relative">
               {user ? (
                 <div className="flex items-center gap-4">
@@ -481,6 +524,74 @@ const Dashboard = () => {
           </div>
         </div>
       </header>
+
+      {/* Company + tenure summary */}
+      <div className="bg-white border-b border-[#E7E5E4]">
+        <div className="max-w-[1600px] mx-auto px-6 py-4">
+          <div className="bg-[#F9FAFB] border border-[#E7E5E4] rounded-2xl px-4 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div className="space-y-2 text-sm text-[#44403C]">
+              <p className="text-xs font-semibold uppercase tracking-wide text-[#78716C]">
+                Career transitions context
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <span>Career transitions of</span>
+                <input
+                  type="text"
+                  value={topCompanyName}
+                  onChange={(e) => setTopCompanyName(e.target.value)}
+                  placeholder="Enter company"
+                  className="h-9 px-3 rounded-full border border-[#E7E5E4] bg-white text-sm text-[#1C1917] focus:outline-none focus:border-[#1C1917] focus:ring-0 min-w-[160px]"
+                />
+                <span>alumni who left between</span>
+                <select
+                  value={topStartYear || ''}
+                  onChange={(e) => setTopStartYear(e.target.value)}
+                  className="h-9 px-3 rounded-full border border-[#E7E5E4] bg-white text-sm text-[#1C1917] focus:outline-none focus:border-[#1C1917] focus:ring-0"
+                >
+                  <option value="">Start year</option>
+                  {years.map((year) => (
+                    <option key={`top-start-${year}`} value={year}>
+                      {year}
+                    </option>
+                  ))}
+                </select>
+                <span>and</span>
+                <select
+                  value={topEndYear || ''}
+                  onChange={(e) => setTopEndYear(e.target.value)}
+                  className="h-9 px-3 rounded-full border border-[#E7E5E4] bg-white text-sm text-[#1C1917] focus:outline-none focus:border-[#1C1917] focus:ring-0"
+                >
+                  <option value="">End year</option>
+                  {years.map((year) => (
+                    <option key={`top-end-${year}`} value={year}>
+                      {year}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="flex items-center gap-4 md:pl-4 md:border-l md:border-[#E7E5E4]">
+              <div className="text-right">
+                <p className="text-xs text-[#78716C]">Alumni in this view</p>
+                <p
+                  className="text-2xl font-bold text-[#1C1917]"
+                  style={{ fontFamily: "'JetBrains Mono', monospace" }}
+                >
+                  {totalAlumni}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleUpdateTopContext}
+                disabled={updatingOrgContext}
+                className="inline-flex items-center justify-center px-4 py-2 rounded-full bg-[#1C1917] text-xs font-semibold text-white hover:bg-[#292524] disabled:opacity-60 disabled:cursor-not-allowed transition-all"
+              >
+                {updatingOrgContext ? 'Updating...' : 'Update view'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* Filters */}
       <div className="bg-white border-b border-[#E7E5E4]">
@@ -548,47 +659,18 @@ const Dashboard = () => {
               <option value="3+">3+ Transitions</option>
             </select>
 
-            {/* Status Filter */}
-            <select
-              value={selectedStatus}
-              onChange={(e) => {
-                const v = e.target.value;
-                setSelectedStatus(v);
-                if (v !== 'all') incrementActivationCounter('status_filter_applied');
+            {/* Advanced Connections Filter */}
+            <button
+              type="button"
+              onClick={() => {
+                setIsFilterOpen(true);
+                incrementActivationCounter('connections_filter_opened');
               }}
-              className="px-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917] bg-white cursor-pointer"
-              data-testid="status-filter"
+              className="inline-flex items-center gap-2 px-3 py-2 border border-[#E7E5E4] rounded-lg text-sm font-medium text-[#1C1917] bg-white hover:bg-[#F5F5F4] transition-colors"
             >
-              <option value="all">All Status</option>
-              <option value="current">Current</option>
-              <option value="past">Past</option>
-            </select>
-
-            {/* Min Transitions */}
-            <input
-              type="number"
-              placeholder="Min transitions"
-              value={minTransitions}
-              onChange={(e) => {
-                setMinTransitions(e.target.value);
-                if (e.target.value !== '') incrementActivationCounter('min_max_transitions_applied');
-              }}
-              className="px-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917] w-32"
-              data-testid="min-transitions-input"
-            />
-
-            {/* Max Transitions */}
-            <input
-              type="number"
-              placeholder="Max transitions"
-              value={maxTransitions}
-              onChange={(e) => {
-                setMaxTransitions(e.target.value);
-                if (e.target.value !== '') incrementActivationCounter('min_max_transitions_applied');
-              }}
-              className="px-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917] w-32"
-              data-testid="max-transitions-input"
-            />
+              <SlidersHorizontal className="w-4 h-4 text-[#78716C]" />
+              Filters
+            </button>
           </div>
 
           {/* Checkboxes and Clear All */}
@@ -619,6 +701,281 @@ const Dashboard = () => {
           </div>
         </div>
       </div>
+
+      {/* Connections filter modal */}
+      <AnimatePresence>
+        {isFilterOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-40 flex items-center justify-center bg-black/30"
+          >
+            <motion.div
+              initial={{ y: 20, opacity: 0, scale: 0.98 }}
+              animate={{ y: 0, opacity: 1, scale: 1 }}
+              exit={{ y: 20, opacity: 0, scale: 0.98 }}
+              transition={{ duration: 0.2 }}
+              className="max-w-4xl w-full mx-4 bg-white border border-[#E7E5E4] rounded-2xl shadow-xl overflow-hidden"
+            >
+              <div className="flex items-start justify-between px-6 pt-5 pb-4 border-b border-[#E7E5E4]">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[#3B82F6]">
+                    My connections — filter who counts
+                  </p>
+                  <p className="mt-1 text-sm text-[#78716C] max-w-xl">
+                    These filters don&apos;t change which destination companies are shown. They only help you
+                    see where you already have a warm connection.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsFilterOpen(false)}
+                  className="p-1.5 rounded-full hover:bg-[#F5F5F4] text-[#78716C]"
+                  aria-label="Close filters"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="px-6 py-5 grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Past Company Connections */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-[#22C55E]" />
+                    <h3 className="text-sm font-semibold text-[#1C1917]">
+                      Past company connections
+                    </h3>
+                  </div>
+                  <p className="text-xs text-[#78716C]">
+                    Use your work history to find colleagues who are now at these destination companies.
+                  </p>
+
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-xs font-medium text-[#57534E] mb-2">Which company</p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setCompanyScope('all')}
+                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${companyScope === 'all'
+                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                            }`}
+                        >
+                          All past companies
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCompanyScope('last')}
+                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${companyScope === 'last'
+                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                            }`}
+                        >
+                          Most recent company
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-medium text-[#57534E] mb-2">Their role</p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setCompanyRoleFilter('any')}
+                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${companyRoleFilter === 'any'
+                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                            }`}
+                        >
+                          Any role
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCompanyRoleFilter('same-role')}
+                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${companyRoleFilter === 'same-role'
+                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                            }`}
+                        >
+                          Same role as me
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCompanyRoleFilter('same-function')}
+                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${companyRoleFilter === 'same-function'
+                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                            }`}
+                        >
+                          Same function
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-medium text-[#57534E] mb-2">Tenure overlap</p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setCompanyTenureFilter('with-me')}
+                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${companyTenureFilter === 'with-me'
+                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                            }`}
+                        >
+                          Worked with me
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCompanyTenureFilter('near-me')}
+                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${companyTenureFilter === 'near-me'
+                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                            }`}
+                        >
+                          Near my time
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCompanyTenureFilter('any-time')}
+                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${companyTenureFilter === 'any-time'
+                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                            }`}
+                        >
+                          Any time
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* College Connections */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-[#EF4444]" />
+                    <h3 className="text-sm font-semibold text-[#1C1917]">
+                      College connections
+                    </h3>
+                  </div>
+                  <p className="text-xs text-[#78716C]">
+                    Use your colleges and degrees to find batchmates, seniors, and juniors at each destination company.
+                  </p>
+
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-xs font-medium text-[#57534E] mb-2">Which college</p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setCollegeScope('all')}
+                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${collegeScope === 'all'
+                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                            }`}
+                        >
+                          All colleges
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCollegeScope('primary')}
+                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${collegeScope === 'primary'
+                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                            }`}
+                        >
+                          Primary college
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-medium text-[#57534E] mb-2">Department</p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setCollegeDepartmentFilter('any')}
+                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${collegeDepartmentFilter === 'any'
+                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                            }`}
+                        >
+                          Any department
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCollegeDepartmentFilter('same')}
+                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${collegeDepartmentFilter === 'same'
+                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                            }`}
+                        >
+                          Same as mine
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-medium text-[#57534E] mb-2">Batch proximity</p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setCollegeBatchFilter('exact')}
+                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${collegeBatchFilter === 'exact'
+                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                            }`}
+                        >
+                          Exact batchmates
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCollegeBatchFilter('nearby')}
+                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${collegeBatchFilter === 'nearby'
+                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                            }`}
+                        >
+                          Close batch
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCollegeBatchFilter('any')}
+                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${collegeBatchFilter === 'any'
+                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                            }`}
+                        >
+                          Any batch
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="px-6 py-4 border-t border-[#E7E5E4] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-[#F9FAFB]">
+                <p className="text-xs text-[#57534E] max-w-xl">
+                  These filters will use your work and education from your profile to rank destination companies by
+                  where you have the warmest intros — not to remove companies from the list.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsFilterOpen(false);
+                    navigate('/profile');
+                  }}
+                  className="inline-flex items-center justify-center px-4 py-2 rounded-full bg-[#1C1917] text-xs font-semibold text-white hover:bg-[#292524] transition-all"
+                >
+                  Fill profile to unlock
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Tabs */}
       <div className="bg-white border-b border-[#E7E5E4]">
