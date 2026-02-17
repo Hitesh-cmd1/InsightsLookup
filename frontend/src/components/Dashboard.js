@@ -446,6 +446,16 @@ const Dashboard = () => {
                         </div>
                         <button
                           onClick={() => {
+                            setIsProfileMenuOpen(false);
+                            navigate('/profile');
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[#1C1917] hover:bg-[#F5F5F4] rounded-lg transition-all"
+                        >
+                          <UserIcon className="w-4 h-4" />
+                          Profile
+                        </button>
+                        <button
+                          onClick={() => {
                             logout();
                             setIsProfileMenuOpen(false);
                             navigate('/');
@@ -794,13 +804,7 @@ const Dashboard = () => {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-4 mb-4 pb-4 border-b border-[#E7E5E4]">
-                        <div>
-                          <p className="text-xs text-[#78716C] mb-1">People (all transitions):</p>
-                          <p className="text-xl font-bold text-[#1C1917]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
-                            {company.totalPeople}
-                          </p>
-                        </div>
+                      <div className="grid grid-cols-1 gap-4 mb-4 pb-4 border-b border-[#E7E5E4]">
                         <div>
                           <p className="text-xs text-[#78716C] mb-1">Recent:</p>
                           <p className="text-xl font-bold text-[#1C1917]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
@@ -924,16 +928,7 @@ const Dashboard = () => {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-4 mb-4 pb-4 border-b border-[#E7E5E4]">
-                        <div>
-                          <p className="text-xs text-[#78716C] mb-1">People (all transitions):</p>
-                          <p
-                            className="text-xl font-bold text-[#1C1917]"
-                            style={{ fontFamily: "'JetBrains Mono', monospace" }}
-                          >
-                            {company.totalPeople}
-                          </p>
-                        </div>
+                      <div className="grid grid-cols-1 gap-4 mb-4 pb-4 border-b border-[#E7E5E4]">
                         <div>
                           <p className="text-xs text-[#78716C] mb-1">Recent:</p>
                           <p
@@ -1066,16 +1061,7 @@ const Dashboard = () => {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-4 mb-4 pb-4 border-b border-[#E7E5E4]">
-                        <div>
-                          <p className="text-xs text-[#78716C] mb-1">People (all transitions):</p>
-                          <p
-                            className="text-xl font-bold text-[#1C1917]"
-                            style={{ fontFamily: "'JetBrains Mono', monospace" }}
-                          >
-                            {company.totalPeople}
-                          </p>
-                        </div>
+                      <div className="grid grid-cols-1 gap-4 mb-4 pb-4 border-b border-[#E7E5E4]">
                         <div>
                           <p className="text-xs text-[#78716C] mb-1">Recent:</p>
                           <p

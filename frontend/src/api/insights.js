@@ -180,3 +180,92 @@ export async function logoutUser() {
   }
   return res.json();
 }
+
+/**
+ * Profile Endpoints
+ */
+export async function getProfile() {
+  const url = API_BASE ? `${API_BASE}/profile` : '/profile';
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: getAuthHeaders()
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to load profile');
+  }
+  return res.json();
+}
+
+export async function updateProfile(payload) {
+  const url = API_BASE ? `${API_BASE}/profile` : '/profile';
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to save profile');
+  }
+  return res.json();
+}
+
+export async function uploadResume(file) {
+  const url = API_BASE ? `${API_BASE}/profile/resume` : '/profile/resume';
+  const formData = new FormData();
+  formData.append('resume', file);
+
+  const headers = getAuthHeaders();
+  // Let the browser set proper multipart boundary
+  if (headers['Content-Type']) {
+    delete headers['Content-Type'];
+  }
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: formData
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to upload resume');
+  }
+  return res.json();
+}
+
+export async function deleteResume() {
+  const url = API_BASE ? `${API_BASE}/profile/resume` : '/profile/resume';
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: getAuthHeaders()
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to remove resume');
+  }
+  return res.json();
+}
+
+export async function downloadResume(filename) {
+  const url = API_BASE ? `${API_BASE}/profile/resume` : '/profile/resume';
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${localStorage.getItem('insights_token')}`
+    }
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to download resume');
+  }
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = objectUrl;
+  a.download = filename || 'resume.pdf';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(objectUrl);
+}

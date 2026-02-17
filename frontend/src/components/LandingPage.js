@@ -206,6 +206,16 @@ const LandingPage = () => {
                     </div>
                     <button
                       onClick={() => {
+                        setIsProfileMenuOpen(false);
+                        navigate('/profile');
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[#1C1917] hover:bg-[#F5F5F4] rounded-lg transition-all"
+                    >
+                      <UserIcon className="w-4 h-4" />
+                      Profile
+                    </button>
+                    <button
+                      onClick={() => {
                         logout();
                         setIsProfileMenuOpen(false);
                         navigate('/');

@@ -25,6 +25,9 @@ export function initMixpanel() {
     record_sessions_percent: 100,
   });
   isInitialized = true;
+  if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
+    window.mixpanel = mixpanel; // for console debugging: mixpanel.get_distinct_id(), etc.
+  }
 }
 
 function getMixpanel() {

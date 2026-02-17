@@ -4,20 +4,35 @@ import os
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from dotenv import load_dotenv
-import jwt
 from functools import wraps
 
-load_dotenv()
-
-# ... (rest of path setup remains same)
-
-from flask import Flask, jsonify, request
+import jwt
+from dotenv import load_dotenv
+from flask import Flask, jsonify, request, send_file
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from sqlalchemy import func
 
-from db.models import get_db, init_db, Organization, Experience, Role, User, OTP
+from db.models import (
+    get_db,
+    init_db,
+    Organization,
+    Experience,
+    Role,
+    User,
+    OTP,
+    TrueOrganization,
+    TrueRole,
+    TrueSchool,
+    TrueExperience,
+    TrueEducation,
+    TrueSkill,
+    SessionLocal,
+)
+from pipeline.format_data import parse_resume_for_user
+from pipeline.save import parse_tenure, parse_degree
+
+load_dotenv()
 
 
 app = Flask(__name__)
@@ -45,7 +60,7 @@ def _add_cors(resp):
     origin = request.headers.get("Origin")
     if origin:
         resp.headers["Access-Control-Allow-Origin"] = origin
-    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     resp.headers["Access-Control-Allow-Credentials"] = "true"
     return resp
@@ -64,9 +79,11 @@ def token_required(f):
 
         try:
             data = jwt.decode(token, JWT_SECRET_KEY, algorithms=["HS256"])
-            # In a production app, you might query the user from the DB here:
-            # current_user = db.query(User).filter(User.id == data["user_id"]).first()
-            # But for simple stateless auth, the token data is enough.
+            # Attach minimal user context to the request for downstream handlers.
+            request.current_user = {
+                "id": data.get("user_id"),
+                "email": data.get("email"),
+            }
         except Exception:
             return jsonify({"error": "Token is invalid or expired"}), 401
 
@@ -831,6 +848,353 @@ def get_alumni():
 
         alumni_list.sort(key=lambda x: x["name"])
         return jsonify(alumni_list)
+
+
+def _get_or_create_true_lookup(session, model, name_field, name_value):
+    """
+    get_or_create helper for true_* lookup tables.
+    """
+    if not name_value or not str(name_value).strip():
+        return None
+
+    name_value = str(name_value).strip()
+    column = getattr(model, name_field)
+    obj = session.query(model).filter(column == name_value).first()
+    if obj:
+        return obj
+
+    obj = model(**{name_field: name_value})
+    session.add(obj)
+    session.flush()
+    return obj
+
+
+def _serialize_profile(user):
+    """
+    Serialize User + true_* relations into a profile JSON shape
+    understood by the frontend Profile Page.
+    """
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "profile_id": user.profile_id,
+        "work_experiences": [
+            {
+                "id": exp.id,
+                "company": exp.organization.name if exp.organization else None,
+                "role": exp.role.name if exp.role else None,
+                "start_date": exp.start_date.isoformat() if exp.start_date else None,
+                "end_date": exp.end_date.isoformat() if exp.end_date else None,
+            }
+            for exp in sorted(user.true_experiences, key=lambda e: (e.start_date or date.min))
+        ],
+        "educations": [
+            {
+                "id": edu.id,
+                "college": edu.school.name if edu.school else None,
+                "degree": edu.degree,
+                "start_date": edu.start_date.isoformat() if edu.start_date else None,
+                "end_date": edu.end_date.isoformat() if edu.end_date else None,
+            }
+            for edu in sorted(user.true_educations, key=lambda e: (e.start_date or date.min))
+        ],
+        "skills": [s.skill for s in user.true_skills],
+    }
+
+
+@app.get("/profile")
+@token_required
+def get_profile_endpoint():
+    """
+    GET /profile
+
+    Returns the current user's profile, including:
+    - Basic info (name, email, profile_id)
+    - true_experiences (work_experiences)
+    - true_educations (educations)
+    - true_skills (skills)
+    """
+    current = getattr(request, "current_user", None)
+    if not current or not current.get("id"):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.id == current["id"]).first()
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+        # Ensure relationships are loaded
+        _ = user.true_experiences, user.true_educations, user.true_skills
+        return jsonify(_serialize_profile(user))
+
+
+@app.put("/profile")
+@token_required
+def update_profile_endpoint():
+    """
+    PUT /profile
+
+    Payload:
+    {
+      "name": "New Name",
+      "work_experiences": [
+        {"company": "...", "role": "...", "start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD"},
+        ...
+      ],
+      "educations": [
+        {"college": "...", "degree": "...", "start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD"},
+        ...
+      ],
+      "skills": ["React", "SQL", ...]
+    }
+
+    Email is intentionally immutable and cannot be changed here.
+    """
+    current = getattr(request, "current_user", None)
+    if not current or not current.get("id"):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.json or {}
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.id == current["id"]).first()
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        # Basic info
+        new_name = (data.get("name") or "").strip()
+        if new_name:
+            user.name = new_name
+
+        # Clear existing true_* data so we can fully replace with payload
+        db.query(TrueExperience).filter(TrueExperience.user_id == user.id).delete()
+        db.query(TrueEducation).filter(TrueEducation.user_id == user.id).delete()
+        db.query(TrueSkill).filter(TrueSkill.user_id == user.id).delete()
+
+        # Work experiences
+        for item in data.get("work_experiences") or []:
+            company = (item.get("company") or "").strip()
+            role_name = (item.get("role") or "").strip()
+            start_str = item.get("start_date")
+            end_str = item.get("end_date")
+
+            org = _get_or_create_true_lookup(db, TrueOrganization, "name", company)
+            role = _get_or_create_true_lookup(db, TrueRole, "name", role_name)
+
+            start_date_val = parse_date(start_str)
+            end_date_val = parse_date(end_str)
+
+            exp = TrueExperience(
+                user_id=user.id,
+                organization=org,
+                role=role,
+                start_date=start_date_val,
+                end_date=end_date_val,
+            )
+            db.add(exp)
+
+        # Educations
+        for item in data.get("educations") or []:
+            college = (item.get("college") or "").strip()
+            degree = (item.get("degree") or "").strip()
+            start_str = item.get("start_date")
+            end_str = item.get("end_date")
+
+            school = _get_or_create_true_lookup(db, TrueSchool, "name", college)
+            start_date_val = parse_date(start_str)
+            end_date_val = parse_date(end_str)
+
+            edu = TrueEducation(
+                user_id=user.id,
+                school=school,
+                degree=degree or None,
+                start_date=start_date_val,
+                end_date=end_date_val,
+            )
+            db.add(edu)
+
+        # Skills (max 10 enforced)
+        skills = data.get("skills") or []
+        skills = [str(s).strip() for s in skills if str(s).strip()]
+        skills = skills[:10]
+        for skill in skills:
+            db.add(TrueSkill(user_id=user.id, skill=skill))
+
+        db.commit()
+        db.refresh(user)
+        _ = user.true_experiences, user.true_educations, user.true_skills
+        return jsonify(_serialize_profile(user))
+
+
+@app.post("/profile/resume")
+@token_required
+def upload_resume_endpoint():
+    """
+    POST /profile/resume
+
+    Multipart form-data:
+      - resume: PDF file
+
+    Behaviour:
+      - Stores the resume file on disk (or external storage in production)
+      - Parses it via the existing resume-parsing pipeline
+      - Maps parsed data into true_* tables and updates the User record
+      - Returns the updated profile JSON
+    """
+    current = getattr(request, "current_user", None)
+    if not current or not current.get("id"):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    if "resume" not in request.files:
+        return jsonify({"error": "Missing 'resume' file"}), 400
+
+    file = request.files["resume"]
+    if not file.filename:
+        return jsonify({"error": "Empty filename"}), 400
+
+    filename = file.filename.lower()
+    if not filename.endswith(".pdf"):
+        return jsonify({"error": "Only PDF resumes are supported"}), 400
+
+    # Store resume to a local uploads folder.
+    # In production you would use cloud/object storage instead.
+    uploads_dir = os.path.join(os.path.dirname(__file__), "uploads")
+    os.makedirs(uploads_dir, exist_ok=True)
+
+    safe_name = f"user_{current['id']}_{int(datetime.now(timezone.utc).timestamp())}.pdf"
+    file_path = os.path.join(uploads_dir, safe_name)
+    file.save(file_path)
+
+    parsed = parse_resume_for_user(file_path)
+    if not parsed or not parsed.get("name"):
+        return jsonify({"error": "Could not parse resume. Please upload a LinkedIn exported PDF."}), 400
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.id == current["id"]).first()
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        # Store a reference to the uploaded resume. In a real deployment this
+        # might be a public/storage URL instead of a local filename.
+        user.profile_id = safe_name
+
+        # Optionally update the user's display name from resume if it's empty.
+        if not user.name and parsed.get("name"):
+            user.name = parsed["name"]
+
+        # Clear existing true_* entries before re-populating from resume
+        db.query(TrueExperience).filter(TrueExperience.user_id == user.id).delete()
+        db.query(TrueEducation).filter(TrueEducation.user_id == user.id).delete()
+        # We intentionally do NOT touch skills here; those are user-entered.
+
+        # Map experiences from parsed resume.
+        for exp in parsed.get("experiences") or []:
+            # exp format: [org, title, tenure, address]
+            org_raw = exp[0] if len(exp) > 0 else None
+            role_raw = exp[1] if len(exp) > 1 else None
+            tenure_raw = exp[2] if len(exp) > 2 else None
+            address_raw = exp[3] if len(exp) > 3 else None
+
+            org = _get_or_create_true_lookup(db, TrueOrganization, "name", org_raw)
+            role = _get_or_create_true_lookup(db, TrueRole, "name", role_raw)
+            start_dt, end_dt, duration = parse_tenure(tenure_raw)
+
+            exp_row = TrueExperience(
+                user_id=user.id,
+                organization=org,
+                role=role,
+                start_date=start_dt.date() if start_dt else None,
+                end_date=end_dt.date() if end_dt else None,
+                duration_text=duration,
+                address=address_raw,
+            )
+            db.add(exp_row)
+
+        # Map educations from parsed resume.
+        for edu in parsed.get("educations") or []:
+            # edu format: [school, degree_str]
+            school_raw = edu[0] if len(edu) > 0 else None
+            degree_raw = edu[1] if len(edu) > 1 else None
+
+            school = _get_or_create_true_lookup(db, TrueSchool, "name", school_raw)
+            degree, start_dt, end_dt = parse_degree(degree_raw)
+
+            edu_row = TrueEducation(
+                user_id=user.id,
+                school=school,
+                degree=degree,
+                start_date=start_dt.date() if start_dt else None,
+                end_date=end_dt.date() if end_dt else None,
+            )
+            db.add(edu_row)
+
+        db.commit()
+        db.refresh(user)
+        _ = user.true_experiences, user.true_educations, user.true_skills
+        return jsonify(_serialize_profile(user))
+
+
+@app.get("/profile/resume")
+@token_required
+def download_resume_endpoint():
+    """
+    GET /profile/resume
+
+    Serves the user's uploaded resume PDF for download.
+    """
+    current = getattr(request, "current_user", None)
+    if not current or not current.get("id"):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.id == current["id"]).first()
+        if not user or not user.profile_id:
+            return jsonify({"error": "No resume uploaded"}), 404
+
+        uploads_dir = os.path.join(os.path.dirname(__file__), "uploads")
+        file_path = os.path.join(uploads_dir, user.profile_id)
+        if not os.path.isfile(file_path):
+            return jsonify({"error": "Resume file not found"}), 404
+
+        return send_file(
+            file_path,
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=user.profile_id,
+        )
+
+
+@app.delete("/profile/resume")
+@token_required
+def delete_resume_endpoint():
+    """
+    DELETE /profile/resume
+
+    Removes the user's resume from storage and clears profile_id in the database.
+    Returns the updated profile JSON.
+    """
+    current = getattr(request, "current_user", None)
+    if not current or not current.get("id"):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.id == current["id"]).first()
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        if user.profile_id:
+            uploads_dir = os.path.join(os.path.dirname(__file__), "uploads")
+            file_path = os.path.join(uploads_dir, user.profile_id)
+            if os.path.isfile(file_path):
+                try:
+                    os.remove(file_path)
+                except OSError:
+                    pass
+            user.profile_id = None
+
+        db.commit()
+        db.refresh(user)
+        _ = user.true_experiences, user.true_educations, user.true_skills
+        return jsonify(_serialize_profile(user))
 
 
 if __name__ == "__main__":
