@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Search, X, ExternalLink, Loader2, LogOut, User as UserIcon, TrendingUp, SlidersHorizontal } from 'lucide-react';
 import { AnimatePresence } from 'framer-motion';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { getOrgTransitions, getEmployeeTransitions, getAlumni, searchOrganizations } from '../api/insights';
+import { getOrgTransitions, getEmployeeTransitions, getAlumni, searchOrganizations, getProfile, getDashboardData } from '../api/insights';
 import { useAuth } from '../context/AuthContext';
 import { trackCoreFeatureUsed, incrementActivationCounter } from '../analytics/mixpanel';
 import { toast } from 'sonner';
@@ -28,15 +28,18 @@ import { toast } from 'sonner';
  *   "2": [...]
  * }
  */
-function mapTransitions(apiResult) {
+function mapTransitions(apiResult, relatedByDest) {
   if (!apiResult || typeof apiResult !== 'object') {
     return { firstHopCompanies: [], secondHopCompanies: [] };
   }
 
-  const hops = Object.keys(apiResult);
+  const hops = Object.keys(apiResult).filter(k => k !== 'related_by_dest');
   if (hops.length === 0) {
     return { firstHopCompanies: [], secondHopCompanies: [] };
   }
+
+  // related_by_dest: { "org_id_str": { count, related: [...] } }
+  const relMap = (relatedByDest && typeof relatedByDest === 'object') ? relatedByDest : {};
 
   // Build a helper map of all hops per destination org
   const perOrg = new Map();
@@ -75,6 +78,8 @@ function mapTransitions(apiResult) {
       const yearsArr = Array.from(entry.years);
       const recentYear = yearsArr.length ? Math.max(...yearsArr) : null;
       const otherHopsCount = entry.totalCount - hopCount;
+      const relEntry = relMap[String(entry.organizationId)] || null;
+      const relatedCount = relEntry ? (relEntry.count || 0) : 0;
 
       cards.push({
         organizationId: entry.organizationId,
@@ -95,11 +100,19 @@ function mapTransitions(apiResult) {
           .map(([h, c]) => ({ moves: Number(h), count: c }))
           .sort((a, b) => a.moves - b.moves),
         years: yearsArr.sort((a, b) => b - a),
+        // Related background: current employees sharing user's org/school background
+        relatedCount,
+        relatedBackground: relEntry || null,
       });
     });
 
-    // Sort by primary people metric desc
-    cards.sort((a, b) => b.people - a.people || a.name.localeCompare(b.name));
+    // Sort: prioritize people (transition count) as primary sort, 
+    // and relatedCount as a secondary tie-breaker.
+    cards.sort((a, b) =>
+      b.people - a.people ||
+      b.relatedCount - a.relatedCount ||
+      a.name.localeCompare(b.name)
+    );
 
     // Add rank
     return cards.map((c, idx) => ({ ...c, rank: idx + 1 }));
@@ -138,14 +151,21 @@ const Dashboard = () => {
   const [selectedStatus, setSelectedStatus] = useState('all');
   const [minTransitions, setMinTransitions] = useState('');
   const [maxTransitions, setMaxTransitions] = useState('');
-  const [noPostJourney, setNoPostJourney] = useState(false);
   const [dataBusinessRoles, setDataBusinessRoles] = useState(false);
+  const [profile, setProfile] = useState(null);
+  const [profileLoaded, setProfileLoaded] = useState(false);
+  const [orgSuggestions, setOrgSuggestions] = useState([]);
+  const [showOrgSuggestions, setShowOrgSuggestions] = useState(false);
+  const [orgSuggestionsLoading, setOrgSuggestionsLoading] = useState(false);
+  const [hasTouchedCompanyInput, setHasTouchedCompanyInput] = useState(false);
+  const [selectedOrg, setSelectedOrg] = useState(null);
   const [activeTab, setActiveTab] = useState('company-pathways');
 
   const [companiesFirst, setCompaniesFirst] = useState([]);
   const [companiesSecond, setCompaniesSecond] = useState([]);
   const [companiesThird, setCompaniesThird] = useState([]);
   const [alumni, setAlumni] = useState([]);
+  const [relatedByDest, setRelatedByDest] = useState({});
   const [loading, setLoading] = useState(true);
   const [loadingAlumni, setLoadingAlumni] = useState(false);
   const [error, setError] = useState(null);
@@ -161,12 +181,72 @@ const Dashboard = () => {
   const years = Array.from({ length: 50 }, (_, i) => new Date().getFullYear() - i);
 
   const [isFilterOpen, setIsFilterOpen] = useState(false);
-  const [companyScope, setCompanyScope] = useState('all');
-  const [companyRoleFilter, setCompanyRoleFilter] = useState('any');
-  const [companyTenureFilter, setCompanyTenureFilter] = useState('with-me');
-  const [collegeScope, setCollegeScope] = useState('all');
-  const [collegeDepartmentFilter, setCollegeDepartmentFilter] = useState('any');
-  const [collegeBatchFilter, setCollegeBatchFilter] = useState('exact');
+  // Multi-select connection filters (arrays). Empty = All/Any for that category.
+  const [selectedPastCompanies, setSelectedPastCompanies] = useState([]);
+  const [selectedPastRoles, setSelectedPastRoles] = useState([]);
+  const [selectedTenureOptions, setSelectedTenureOptions] = useState([]);
+  const [selectedColleges, setSelectedColleges] = useState([]);
+  const [selectedDepartments, setSelectedDepartments] = useState([]);
+  const [selectedBatchOptions, setSelectedBatchOptions] = useState([]);
+  // Applied filters sent to API (set when user clicks Done in modal)
+  const [appliedConnectionFilters, setAppliedConnectionFilters] = useState(null);
+  const lastFetchKeyRef = useRef(null);
+
+  const isProfileEmpty = !profile || !(profile.work_experiences && profile.work_experiences.length > 0);
+  const profileCompanies = useMemo(() => {
+    const work = profile?.work_experiences;
+    if (!work || !Array.isArray(work) || work.length === 0) return [];
+    const seen = new Set();
+    return work
+      .map((e) => e && e.company)
+      .filter(Boolean)
+      .filter((c) => {
+        if (seen.has(c)) return false;
+        seen.add(c);
+        return true;
+      });
+  }, [profile]);
+  const profileRoles = useMemo(() => {
+    const work = profile?.work_experiences;
+    if (!work || !Array.isArray(work) || work.length === 0) return [];
+    const seen = new Set();
+    return work
+      .map((e) => e && e.role)
+      .filter(Boolean)
+      .filter((r) => {
+        if (seen.has(r)) return false;
+        seen.add(r);
+        return true;
+      });
+  }, [profile]);
+
+  const profileColleges = useMemo(() => {
+    const educ = profile?.educations;
+    if (!educ || !Array.isArray(educ) || educ.length === 0) return [];
+    const seen = new Set();
+    return educ
+      .map((e) => e && e.college)
+      .filter(Boolean)
+      .filter((c) => {
+        if (seen.has(c)) return false;
+        seen.add(c);
+        return true;
+      });
+  }, [profile]);
+
+  const profileDepartments = useMemo(() => {
+    const educ = profile?.educations;
+    if (!educ || !Array.isArray(educ) || educ.length === 0) return [];
+    const seen = new Set();
+    return educ
+      .map((e) => e && e.degree)
+      .filter(Boolean)
+      .filter((d) => {
+        if (seen.has(d)) return false;
+        seen.add(d);
+        return true;
+      });
+  }, [profile]);
 
   const clearAllFilters = () => {
     setSearchName('');
@@ -175,8 +255,38 @@ const Dashboard = () => {
     setSelectedStatus('all');
     setMinTransitions('');
     setMaxTransitions('');
-    setNoPostJourney(false);
     setDataBusinessRoles(false);
+    setSelectedPastCompanies([]);
+    setSelectedPastRoles([]);
+    setSelectedTenureOptions([]);
+    setSelectedColleges([]);
+    setSelectedDepartments([]);
+    setSelectedBatchOptions([]);
+    setAppliedConnectionFilters(null);
+  };
+
+  const buildConnectionFilters = () => {
+    const companies = selectedPastCompanies ?? [];
+    const roles = selectedPastRoles ?? [];
+    const tenure = selectedTenureOptions ?? [];
+    const colleges = selectedColleges ?? [];
+    const depts = selectedDepartments ?? [];
+    const batch = selectedBatchOptions ?? [];
+    const hasAny = companies.length > 0 || roles.length > 0 || tenure.length > 0 || colleges.length > 0 || depts.length > 0 || batch.length > 0;
+    if (!hasAny) return null;
+    return {
+      past_companies: companies,
+      past_roles: roles,
+      tenure_options: tenure,
+      colleges,
+      departments: depts,
+      batch_options: batch,
+    };
+  };
+
+  const applyFiltersAndClose = () => {
+    setAppliedConnectionFilters(buildConnectionFilters());
+    setIsFilterOpen(false);
   };
 
   const handleUpdateTopContext = async (e) => {
@@ -198,12 +308,16 @@ const Dashboard = () => {
 
     setUpdatingOrgContext(true);
     try {
-      const orgs = await searchOrganizations(company);
-      if (!orgs || orgs.length === 0) {
-        toast.error(`No organizations found for "${company}"`);
-        return;
+      let resolved = selectedOrg;
+      // If the user hasn't explicitly picked from suggestions, fall back to search
+      if (!resolved) {
+        const orgs = await searchOrganizations(company);
+        if (!orgs || orgs.length === 0) {
+          toast.error(`No organizations found for "${company}"`);
+          return;
+        }
+        resolved = orgs[0];
       }
-      const resolved = orgs[0];
       const state = {
         orgId: resolved.id,
         companyName: resolved.name,
@@ -212,7 +326,7 @@ const Dashboard = () => {
       };
       try {
         sessionStorage.setItem('insightsDashboardState', JSON.stringify(state));
-      } catch (_) {}
+      } catch (_) { }
       trackCoreFeatureUsed('company_search_from_dashboard', {
         company_name: resolved.name,
         org_id: resolved.id,
@@ -228,13 +342,61 @@ const Dashboard = () => {
     }
   };
 
-  // Fetch org-transitions when we have orgId and date range
+  // Fetch profile to know if filters can be shown and to build company/role lists
+  useEffect(() => {
+    if (!user) {
+      setProfile(null);
+      setProfileLoaded(true);
+      return;
+    }
+    setProfileLoaded(false);
+    getProfile()
+      .then((data) => {
+        setProfile(data);
+        setProfileLoaded(true);
+      })
+      .catch(() => {
+        setProfile(null);
+        setProfileLoaded(true);
+      });
+  }, [user]);
+
+  // Debounced company search for suggestions (get_org / organizations API)
+  useEffect(() => {
+    const q = (topCompanyName || '').trim();
+    // Only show suggestions after the user has interacted with the field
+    if (!hasTouchedCompanyInput) {
+      setOrgSuggestions([]);
+      setShowOrgSuggestions(false);
+      return;
+    }
+    if (!q || q.length < 2) {
+      setOrgSuggestions([]);
+      setShowOrgSuggestions(false);
+      return;
+    }
+    const t = setTimeout(() => {
+      setOrgSuggestionsLoading(true);
+      searchOrganizations(q)
+        .then((list) => {
+          setOrgSuggestions(Array.isArray(list) ? list : []);
+          setShowOrgSuggestions(true);
+        })
+        .catch(() => {
+          setOrgSuggestions([]);
+        })
+        .finally(() => setOrgSuggestionsLoading(false));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [topCompanyName, hasTouchedCompanyInput]);
+
+  // Fetch org-transitions when we have orgId and date range (after profile has loaded to avoid duplicate fetches)
   useEffect(() => {
     const orgId = searchParams.orgId;
     const startYear = searchParams.startYear;
     const endYear = searchParams.endYear;
 
-    if (authLoading) return;
+    if (authLoading || !profileLoaded) return;
 
     if (!user) {
       openLogin();
@@ -255,20 +417,70 @@ const Dashboard = () => {
 
     const startDate = startYear ? `${startYear}-01-01` : null;
     const endDate = endYear ? `${endYear}-12-31` : null;
+    const useDashboardData = !appliedConnectionFilters && !!(profile?.work_experiences?.length);
+    const fetchKey = `${orgId}-${startYear}-${endYear}-${contextRole || ''}-${appliedConnectionFilters ? 'f' : 'n'}-${useDashboardData ? 'd' : 't'}`;
+    if (lastFetchKeyRef.current === fetchKey) return;
+    lastFetchKeyRef.current = fetchKey;
 
     setLoading(true);
     setError(null);
-    getOrgTransitions(orgId, { startDate, endDate, hops: 3, role: contextRole })
-      .then((data) => {
-        const { firstHopCompanies, secondHopCompanies, thirdHopCompanies } = mapTransitions(data);
-        setCompaniesFirst(firstHopCompanies);
-        setCompaniesSecond(secondHopCompanies);
-        setCompaniesThird(thirdHopCompanies);
-        // For the "Total Alumni" header, continue to use sum of 1st-hop people
-        const total = firstHopCompanies.reduce((sum, c) => sum + (c.people || 0), 0);
-        setTotalAlumni(total);
 
-        // Calculate highlights based on role_match
+    if (useDashboardData) {
+      getDashboardData(orgId, { startDate, endDate, hops: 3, role: contextRole })
+        .then((data) => {
+          const transitions = data.transitions || {};
+          const relatedByDestData = (typeof data.related_by_dest === 'object' && data.related_by_dest !== null)
+            ? data.related_by_dest : {};
+          const { firstHopCompanies, secondHopCompanies, thirdHopCompanies } = mapTransitions(transitions, relatedByDestData);
+          const first = firstHopCompanies ?? [];
+          const second = secondHopCompanies ?? [];
+          const third = thirdHopCompanies ?? [];
+          setCompaniesFirst(first);
+          setCompaniesSecond(second);
+          setCompaniesThird(third);
+          const total = first.reduce((sum, c) => sum + (c.people || 0), 0);
+          setTotalAlumni(total);
+          setAlumni(Array.isArray(data.alumni) ? data.alumni : []);
+          const highlighted = new Set();
+          if (transitions && typeof transitions === 'object') {
+            Object.values(transitions).forEach((list) => {
+              if (!Array.isArray(list)) return;
+              list.forEach((item) => {
+                if (!item || item.organization_id == null) return;
+                if (item.role_match || item.match) highlighted.add(item.organization_id);
+              });
+            });
+          }
+          setHighlightedOrgIds(highlighted);
+          setRelatedByDest(relatedByDestData);
+          trackCoreFeatureUsed('hiring_pattern_view', { org_id: orgId, start_year: startYear, end_year: endYear, has_role_filter: !!contextRole });
+        })
+        .catch((err) => {
+          setError(err.message || 'Failed to load dashboard data');
+          setCompaniesFirst([]);
+          setCompaniesSecond([]);
+          setCompaniesThird([]);
+          setTotalAlumni(0);
+          setAlumni([]);
+          setRelatedByDest({});
+        })
+        .finally(() => setLoading(false));
+      return;
+    }
+
+    getOrgTransitions(orgId, { startDate, endDate, hops: 3, role: contextRole, connectionFilters: appliedConnectionFilters, includeRelated: true })
+      .then((data) => {
+        const relatedByDestData = (typeof data.related_by_dest === 'object' && data.related_by_dest !== null)
+          ? data.related_by_dest : {};
+        const { firstHopCompanies, secondHopCompanies, thirdHopCompanies } = mapTransitions(data, relatedByDestData);
+        const first = firstHopCompanies ?? [];
+        const second = secondHopCompanies ?? [];
+        const third = thirdHopCompanies ?? [];
+        setCompaniesFirst(first);
+        setCompaniesSecond(second);
+        setCompaniesThird(third);
+        const total = first.reduce((sum, c) => sum + (c.people || 0), 0);
+        setTotalAlumni(total);
         const highlighted = new Set();
         if (data && typeof data === 'object') {
           Object.values(data).forEach((list) => {
@@ -281,6 +493,7 @@ const Dashboard = () => {
           });
         }
         setHighlightedOrgIds(highlighted);
+        setRelatedByDest(relatedByDestData);
         trackCoreFeatureUsed('hiring_pattern_view', { org_id: orgId, start_year: startYear, end_year: endYear, has_role_filter: !!contextRole });
       })
       .catch((err) => {
@@ -289,9 +502,10 @@ const Dashboard = () => {
         setCompaniesSecond([]);
         setCompaniesThird([]);
         setTotalAlumni(0);
+        setRelatedByDest({});
       })
       .finally(() => setLoading(false));
-  }, [searchParams.orgId, searchParams.startYear, searchParams.endYear, contextRole, user, openLogin, authLoading, location.state, navigate]);
+  }, [searchParams.orgId, searchParams.startYear, searchParams.endYear, contextRole, appliedConnectionFilters, profile, profileLoaded, user, openLogin, authLoading]);
 
   // Fetch alumni when the tab is active
   useEffect(() => {
@@ -301,23 +515,22 @@ const Dashboard = () => {
     const startDate = searchParams.startYear ? `${searchParams.startYear}-01-01` : null;
     const endDate = searchParams.endYear ? `${searchParams.endYear}-12-31` : null;
 
-    getAlumni(searchParams.orgId, { startDate, endDate })
+    getAlumni(searchParams.orgId, { startDate, endDate, connectionFilters: appliedConnectionFilters })
       .then((data) => {
-        setAlumni(data);
+        setAlumni(Array.isArray(data) ? data : []);
       })
       .catch((err) => {
         console.error('Failed to load alumni', err);
       })
       .finally(() => setLoadingAlumni(false));
-  }, [activeTab, searchParams.orgId, searchParams.startYear, searchParams.endYear]);
+  }, [activeTab, searchParams.orgId, searchParams.startYear, searchParams.endYear, appliedConnectionFilters]);
 
   // Client-side filter by search name (and other filters if needed)
   const applyCommonFilters = (list) => {
-    let next = list;
-    if (searchName.trim()) {
-      next = next.filter((c) =>
-        c.name.toLowerCase().includes(searchName.toLowerCase())
-      );
+    let next = Array.isArray(list) ? list : [];
+    if ((searchName || '').trim()) {
+      const q = (searchName || '').toLowerCase();
+      next = next.filter((c) => c && String(c.name || '').toLowerCase().includes(q));
     }
     // Transition filter: filter by hop presence (1, 2, or 3+)
     if (selectedTransition !== 'all') {
@@ -349,29 +562,24 @@ const Dashboard = () => {
   // When a role is set, only show companies that hired into that role (role_match from API)
   const filterByRoleMatch = (list) => {
     const role = (contextRole || '').trim();
-    if (!role) return list;
-    return list.filter((c) => highlightedOrgIds.has(c.organizationId));
+    if (!role) return Array.isArray(list) ? list : [];
+    return (Array.isArray(list) ? list : []).filter((c) => highlightedOrgIds.has(c.organizationId));
   };
 
-  const filteredCompaniesFirst = filterByRoleMatch(applyCommonFilters(companiesFirst));
-  const filteredCompaniesSecond = filterByRoleMatch(applyCommonFilters(companiesSecond));
-  const filteredCompaniesThird = filterByRoleMatch(applyCommonFilters(companiesThird));
+  const filteredCompaniesFirst = filterByRoleMatch(applyCommonFilters(companiesFirst ?? []));
+  const filteredCompaniesSecond = filterByRoleMatch(applyCommonFilters(companiesSecond ?? []));
+  const filteredCompaniesThird = filterByRoleMatch(applyCommonFilters(companiesThird ?? []));
 
   const isOrgHighlighted = (orgId) => highlightedOrgIds.has(orgId);
 
   // Filter alumni list
   const filteredAlumni = useMemo(() => {
-    let next = alumni;
-    if (searchName.trim()) {
-      next = next.filter(a => a.name.toLowerCase().includes(searchName.toLowerCase()));
-    }
-    if (noPostJourney) {
-      // "No post-company journey" means the path is empty (they are still at the company or we don't know where they went)
-      // Actually, in the backend current_company defaults to org_id if path is empty.
-      next = next.filter(a => !a.path || a.path.length === 0);
+    let next = Array.isArray(alumni) ? alumni : [];
+    if ((searchName || '').trim()) {
+      next = next.filter((a) => (a && a.name && String(a.name).toLowerCase().includes((searchName || '').toLowerCase())));
     }
     return next;
-  }, [alumni, searchName, noPostJourney]);
+  }, [alumni, searchName]);
 
   const applyRoleContext = async () => {
     const role = (contextRole || '').trim();
@@ -411,9 +619,12 @@ const Dashboard = () => {
       });
 
       const { firstHopCompanies, secondHopCompanies, thirdHopCompanies } = mapTransitions(data);
-      setCompaniesFirst(firstHopCompanies);
-      setCompaniesSecond(secondHopCompanies);
-      setCompaniesThird(thirdHopCompanies);
+      const first = firstHopCompanies ?? [];
+      const second = secondHopCompanies ?? [];
+      const third = thirdHopCompanies ?? [];
+      setCompaniesFirst(first);
+      setCompaniesSecond(second);
+      setCompaniesThird(third);
 
       // Build a highlight set from any hop where the backend indicates
       // a role match (supports both `role_match` and `match` flags).
@@ -535,13 +746,52 @@ const Dashboard = () => {
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 <span>Career transitions of</span>
-                <input
-                  type="text"
-                  value={topCompanyName}
-                  onChange={(e) => setTopCompanyName(e.target.value)}
-                  placeholder="Enter company"
-                  className="h-9 px-3 rounded-full border border-[#E7E5E4] bg-white text-sm text-[#1C1917] focus:outline-none focus:border-[#1C1917] focus:ring-0 min-w-[160px]"
-                />
+                <div className="relative min-w-[200px]">
+                  <input
+                    type="text"
+                    value={topCompanyName}
+                    onChange={(e) => {
+                      setHasTouchedCompanyInput(true);
+                      setSelectedOrg(null);
+                      setTopCompanyName(e.target.value);
+                    }}
+                    onFocus={() => {
+                      setHasTouchedCompanyInput(true);
+                      if (orgSuggestions.length > 0) setShowOrgSuggestions(true);
+                    }}
+                    onBlur={() => setTimeout(() => setShowOrgSuggestions(false), 180)}
+                    placeholder="Search company..."
+                    className="h-9 w-full px-3 rounded-full border border-[#E7E5E4] bg-white text-sm text-[#1C1917] focus:outline-none focus:border-[#1C1917] focus:ring-0"
+                  />
+                  {orgSuggestionsLoading && (
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2">
+                      <Loader2 className="w-4 h-4 text-[#78716C] animate-spin" />
+                    </span>
+                  )}
+                  {showOrgSuggestions && orgSuggestions.length > 0 && (
+                    <ul className="absolute left-0 right-0 top-full mt-1 py-1 bg-white border border-[#E7E5E4] rounded-xl shadow-lg z-50 max-h-56 overflow-auto">
+                      {orgSuggestions.map((org) => (
+                        <li key={org.id}>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              setSelectedOrg(org);
+                              setTopCompanyName(org.name);
+                              setShowOrgSuggestions(false);
+                            }}
+                            className="w-full text-left px-3 py-2 text-sm text-[#1C1917] hover:bg-[#F5F5F4] flex justify-between items-center"
+                          >
+                            <span>{org.name}</span>
+                            {org.alumni_count != null && (
+                              <span className="text-xs text-[#78716C]">{org.alumni_count} alumni</span>
+                            )}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
                 <span>alumni who left between</span>
                 <select
                   value={topStartYear || ''}
@@ -673,18 +923,8 @@ const Dashboard = () => {
             </button>
           </div>
 
-          {/* Checkboxes and Clear All */}
+          {/* Clear All */}
           <div className="flex items-center gap-6 mt-3">
-            <label className="flex items-center gap-2 text-sm text-[#1C1917] cursor-pointer">
-              <input
-                type="checkbox"
-                checked={noPostJourney}
-                onChange={(e) => setNoPostJourney(e.target.checked)}
-                className="w-4 h-4 rounded border-[#E7E5E4]"
-                data-testid="no-post-journey-checkbox"
-              />
-              No post-{searchParams.companyName || 'Company'} journey
-            </label>
             <button
               onClick={() => {
                 incrementActivationCounter('clear_filters_clicks');
@@ -696,7 +936,7 @@ const Dashboard = () => {
               Clear All
             </button>
             <span className="text-sm text-[#78716C]">
-              Showing {filteredCompaniesFirst.length} companies
+              Showing {(filteredCompaniesFirst ?? []).length} companies
             </span>
           </div>
         </div>
@@ -738,218 +978,268 @@ const Dashboard = () => {
                 </button>
               </div>
 
-              <div className="px-6 py-5 grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Past Company Connections */}
-                <div className="space-y-4">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-[#22C55E]" />
-                    <h3 className="text-sm font-semibold text-[#1C1917]">
-                      Past company connections
-                    </h3>
-                  </div>
-                  <p className="text-xs text-[#78716C]">
-                    Use your work history to find colleagues who are now at these destination companies.
-                  </p>
-
-                  <div className="space-y-3">
-                    <div>
-                      <p className="text-xs font-medium text-[#57534E] mb-2">Which company</p>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setCompanyScope('all')}
-                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${companyScope === 'all'
-                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
-                            }`}
-                        >
-                          All past companies
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setCompanyScope('last')}
-                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${companyScope === 'last'
-                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
-                            }`}
-                        >
-                          Most recent company
-                        </button>
-                      </div>
-                    </div>
-
-                    <div>
-                      <p className="text-xs font-medium text-[#57534E] mb-2">Their role</p>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setCompanyRoleFilter('any')}
-                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${companyRoleFilter === 'any'
-                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
-                            }`}
-                        >
-                          Any role
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setCompanyRoleFilter('same-role')}
-                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${companyRoleFilter === 'same-role'
-                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
-                            }`}
-                        >
-                          Same role as me
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setCompanyRoleFilter('same-function')}
-                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${companyRoleFilter === 'same-function'
-                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
-                            }`}
-                        >
-                          Same function
-                        </button>
-                      </div>
-                    </div>
-
-                    <div>
-                      <p className="text-xs font-medium text-[#57534E] mb-2">Tenure overlap</p>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setCompanyTenureFilter('with-me')}
-                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${companyTenureFilter === 'with-me'
-                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
-                            }`}
-                        >
-                          Worked with me
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setCompanyTenureFilter('near-me')}
-                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${companyTenureFilter === 'near-me'
-                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
-                            }`}
-                        >
-                          Near my time
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setCompanyTenureFilter('any-time')}
-                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${companyTenureFilter === 'any-time'
-                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
-                            }`}
-                        >
-                          Any time
-                        </button>
-                      </div>
+              <div className="relative px-6 py-5">
+                {isProfileEmpty && (
+                  <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80 backdrop-blur-sm rounded-b-2xl">
+                    <div className="max-w-md mx-4 text-center px-6 py-8">
+                      <p className="text-lg font-semibold text-[#1C1917]">
+                        To unlock advanced filters, please complete your profile.
+                      </p>
+                      <p className="mt-3 text-sm text-[#57534E]">
+                        Adding your work history and education lets you filter by past company connections and college networks—so you can see which destination companies have people you worked with or studied with.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsFilterOpen(false);
+                          navigate('/profile');
+                        }}
+                        className="mt-5 inline-flex items-center justify-center px-5 py-2.5 rounded-full bg-[#1C1917] text-sm font-semibold text-white hover:bg-[#292524] transition-all"
+                      >
+                        Go to Profile
+                      </button>
                     </div>
                   </div>
-                </div>
+                )}
+                <div className={`grid grid-cols-1 md:grid-cols-2 gap-6 ${isProfileEmpty ? 'select-none pointer-events-none blur-md opacity-50' : ''}`}>
+                  {/* Past Company Connections */}
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-[#22C55E]" />
+                      <h3 className="text-sm font-semibold text-[#1C1917]">
+                        Past company connections
+                      </h3>
+                    </div>
+                    <p className="text-xs text-[#78716C]">
+                      Use your work history to find colleagues who are now at these destination companies.
+                    </p>
 
-                {/* College Connections */}
-                <div className="space-y-4">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-[#EF4444]" />
-                    <h3 className="text-sm font-semibold text-[#1C1917]">
-                      College connections
-                    </h3>
+                    <div className="space-y-3">
+                      <div>
+                        <p className="text-xs font-medium text-[#57534E] mb-2">Which company (multi-select)</p>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedPastCompanies([])}
+                            className={`px-3 py-1.5 rounded-full border text-xs font-medium ${(selectedPastCompanies ?? []).length === 0
+                              ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                              : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                              }`}
+                          >
+                            All
+                          </button>
+                          {(profileCompanies ?? []).map((company) => {
+                            const selected = (selectedPastCompanies ?? []).includes(company);
+                            return (
+                              <button
+                                key={company}
+                                type="button"
+                                onClick={() => setSelectedPastCompanies(prev => {
+                                  const p = prev ?? [];
+                                  return p.includes(company) ? p.filter((c) => c !== company) : [...p, company];
+                                })}
+                                className={`px-3 py-1.5 rounded-full border text-xs font-medium ${selected
+                                  ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                                  : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                                  }`}
+                              >
+                                {company}
+                              </button>
+                            );
+                          })}
+                          {!isProfileEmpty && (profileCompanies ?? []).length === 0 && (
+                            <span className="text-xs text-[#78716C]">Add companies in your profile</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div>
+                        <p className="text-xs font-medium text-[#57534E] mb-2">Their role (multi-select)</p>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedPastRoles([])}
+                            className={`px-3 py-1.5 rounded-full border text-xs font-medium ${(selectedPastRoles ?? []).length === 0
+                              ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                              : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                              }`}
+                          >
+                            Any Role
+                          </button>
+                          {(profileRoles ?? []).map((role) => {
+                            const selected = (selectedPastRoles ?? []).includes(role);
+                            return (
+                              <button
+                                key={role}
+                                type="button"
+                                onClick={() => setSelectedPastRoles(prev => {
+                                  const p = prev ?? [];
+                                  return p.includes(role) ? p.filter((r) => r !== role) : [...p, role];
+                                })}
+                                className={`px-3 py-1.5 rounded-full border text-xs font-medium ${selected
+                                  ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                                  : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                                  }`}
+                              >
+                                {role}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div>
+                        <p className="text-xs font-medium text-[#57534E] mb-2">Tenure (multi-select)</p>
+                        <div className="flex flex-wrap gap-2">
+                          {[
+                            { id: 'with-me', label: 'Worked with me', title: 'Any person with matching or overlapping tenure' },
+                            { id: 'near-me', label: 'Near my time', title: 'People who exited up to 2 years before your start or up to 2 years after your end date' },
+                            { id: 'any-time', label: 'Anytime', title: 'No tenure restriction' },
+                          ].map(({ id, label, title }) => {
+                            const selected = (selectedTenureOptions ?? []).includes(id);
+                            return (
+                              <button
+                                key={id}
+                                type="button"
+                                title={title}
+                                onClick={() => setSelectedTenureOptions(prev => {
+                                  const p = prev ?? [];
+                                  return p.includes(id) ? p.filter((t) => t !== id) : [...p, id];
+                                })}
+                                className={`px-3 py-1.5 rounded-full border text-xs font-medium ${selected
+                                  ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                                  : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                                  }`}
+                              >
+                                {label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <p className="text-xs text-[#78716C] mt-1.5">
+                          Worked with me: overlapping tenure. Near my time: exited within 2 years of your stint. Anytime: no restriction.
+                        </p>
+                      </div>
+                    </div>
                   </div>
-                  <p className="text-xs text-[#78716C]">
-                    Use your colleges and degrees to find batchmates, seniors, and juniors at each destination company.
-                  </p>
 
-                  <div className="space-y-3">
-                    <div>
-                      <p className="text-xs font-medium text-[#57534E] mb-2">Which college</p>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setCollegeScope('all')}
-                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${collegeScope === 'all'
-                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
-                            }`}
-                        >
-                          All colleges
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setCollegeScope('primary')}
-                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${collegeScope === 'primary'
-                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
-                            }`}
-                        >
-                          Primary college
-                        </button>
-                      </div>
+                  {/* College Connections */}
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-[#EF4444]" />
+                      <h3 className="text-sm font-semibold text-[#1C1917]">
+                        College connections
+                      </h3>
                     </div>
+                    <p className="text-xs text-[#78716C]">
+                      Use your colleges and degrees to find batchmates, seniors, and juniors at each destination company.
+                    </p>
 
-                    <div>
-                      <p className="text-xs font-medium text-[#57534E] mb-2">Department</p>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setCollegeDepartmentFilter('any')}
-                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${collegeDepartmentFilter === 'any'
-                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
-                            }`}
-                        >
-                          Any department
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setCollegeDepartmentFilter('same')}
-                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${collegeDepartmentFilter === 'same'
-                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
-                            }`}
-                        >
-                          Same as mine
-                        </button>
+                    <div className="space-y-3">
+                      <div>
+                        <p className="text-xs font-medium text-[#57534E] mb-2">Which college (multi-select)</p>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedColleges([])}
+                            className={`px-3 py-1.5 rounded-full border text-xs font-medium ${(selectedColleges ?? []).length === 0
+                              ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                              : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                              }`}
+                          >
+                            All
+                          </button>
+                          {(profileColleges ?? []).map((college) => {
+                            const selected = (selectedColleges ?? []).includes(college);
+                            const label = (college && college.length > 22) ? `${String(college).slice(0, 22)}…` : (college ?? '');
+                            return (
+                              <button
+                                key={college}
+                                type="button"
+                                title={college}
+                                onClick={() => setSelectedColleges(prev => {
+                                  const p = prev ?? [];
+                                  return p.includes(college) ? p.filter((c) => c !== college) : [...p, college];
+                                })}
+                                className={`px-3 py-1.5 rounded-full border text-xs font-medium ${selected
+                                  ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                                  : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                                  }`}
+                              >
+                                {label}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
 
-                    <div>
-                      <p className="text-xs font-medium text-[#57534E] mb-2">Batch proximity</p>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setCollegeBatchFilter('exact')}
-                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${collegeBatchFilter === 'exact'
-                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
-                            }`}
-                        >
-                          Exact batchmates
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setCollegeBatchFilter('nearby')}
-                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${collegeBatchFilter === 'nearby'
-                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
-                            }`}
-                        >
-                          Close batch
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setCollegeBatchFilter('any')}
-                          className={`px-3 py-1.5 rounded-full border text-xs font-medium ${collegeBatchFilter === 'any'
-                            ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                            : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
-                            }`}
-                        >
-                          Any batch
-                        </button>
+                      <div>
+                        <p className="text-xs font-medium text-[#57534E] mb-2">Department (multi-select)</p>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedDepartments([])}
+                            className={`px-3 py-1.5 rounded-full border text-xs font-medium ${(selectedDepartments ?? []).length === 0
+                              ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                              : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                              }`}
+                          >
+                            Any Department
+                          </button>
+                          {(profileDepartments ?? []).map((dept) => {
+                            const selected = (selectedDepartments ?? []).includes(dept);
+                            const label = (dept && dept.length > 22) ? `${String(dept).slice(0, 22)}…` : (dept ?? '');
+                            return (
+                              <button
+                                key={dept}
+                                type="button"
+                                title={dept}
+                                onClick={() => setSelectedDepartments(prev => {
+                                  const p = prev ?? [];
+                                  return p.includes(dept) ? p.filter((d) => d !== dept) : [...p, dept];
+                                })}
+                                className={`px-3 py-1.5 rounded-full border text-xs font-medium ${selected
+                                  ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                                  : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                                  }`}
+                              >
+                                {label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div>
+                        <p className="text-xs font-medium text-[#57534E] mb-2">Batch (multi-select)</p>
+                        <div className="flex flex-wrap gap-2">
+                          {[
+                            { id: 'exact', label: 'Batchmates' },
+                            { id: 'close', label: 'Close batch' },
+                            { id: 'any', label: 'Any batch' },
+                          ].map(({ id, label }) => {
+                            const selected = (selectedBatchOptions ?? []).includes(id);
+                            return (
+                              <button
+                                key={id}
+                                type="button"
+                                onClick={() => setSelectedBatchOptions(prev => {
+                                  const p = prev ?? [];
+                                  return p.includes(id) ? p.filter((b) => b !== id) : [...p, id];
+                                })}
+                                className={`px-3 py-1.5 rounded-full border text-xs font-medium ${selected
+                                  ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                                  : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
+                                  }`}
+                              >
+                                {label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <p className="text-xs text-[#78716C] mt-1.5">
+                          Batchmates: same start and end dates. Close batch: ±4 years from start year. Any batch: no restriction.
+                        </p>
                       </div>
                     </div>
                   </div>
@@ -961,16 +1251,45 @@ const Dashboard = () => {
                   These filters will use your work and education from your profile to rank destination companies by
                   where you have the warmest intros — not to remove companies from the list.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsFilterOpen(false);
-                    navigate('/profile');
-                  }}
-                  className="inline-flex items-center justify-center px-4 py-2 rounded-full bg-[#1C1917] text-xs font-semibold text-white hover:bg-[#292524] transition-all"
-                >
-                  Fill profile to unlock
-                </button>
+                {isProfileEmpty ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsFilterOpen(false);
+                      navigate('/profile');
+                    }}
+                    className="inline-flex items-center justify-center px-4 py-2 rounded-full bg-[#1C1917] text-xs font-semibold text-white hover:bg-[#292524] transition-all"
+                  >
+                    Go to Profile
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedPastCompanies([]);
+                        setSelectedPastRoles([]);
+                        setSelectedTenureOptions([]);
+                        setSelectedColleges([]);
+                        setSelectedDepartments([]);
+                        setSelectedBatchOptions([]);
+                        setAppliedConnectionFilters(null);
+                        lastFetchKeyRef.current = null;
+                        setIsFilterOpen(false);
+                      }}
+                      className="inline-flex items-center justify-center px-4 py-2 rounded-full border border-[#E7E5E4] bg-white text-xs font-semibold text-[#1C1917] hover:bg-[#F5F5F4] transition-all"
+                    >
+                      Clear filters
+                    </button>
+                    <button
+                      type="button"
+                      onClick={applyFiltersAndClose}
+                      className="inline-flex items-center justify-center px-4 py-2 rounded-full bg-[#1C1917] text-xs font-semibold text-white hover:bg-[#292524] transition-all"
+                    >
+                      Apply filters
+                    </button>
+                  </div>
+                )}
               </div>
             </motion.div>
           </motion.div>
@@ -1047,7 +1366,7 @@ const Dashboard = () => {
                 1st Transitions
               </h2>
               <span className="text-sm text-[#78716C]">
-                {filteredCompaniesFirst.length} companies
+                {(filteredCompaniesFirst ?? []).length} companies
               </span>
             </div>
 
@@ -1079,7 +1398,7 @@ const Dashboard = () => {
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.05, duration: 0.4 }}
                       whileHover={{ y: -4 }}
-                      className={`bg-white border ${isOrgHighlighted(company.organizationId)
+                      className={`bg-white border ${appliedConnectionFilters || isOrgHighlighted(company.organizationId)
                         ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100'
                         : 'border-[#E7E5E4]'
                         } rounded-xl p-6 hover:shadow-md transition-all cursor-pointer`}
@@ -1097,13 +1416,22 @@ const Dashboard = () => {
                             startYear: searchParams.startYear,
                             endYear: searchParams.endYear,
                             role: contextRole,
+                            relatedBackground: company.relatedBackground,
                           },
                         });
                       }}
                     >
-                      {/* Rank Badge */}
-                      <div className="inline-flex items-center justify-center bg-[#3B82F6] text-white text-sm font-bold rounded px-2 py-1 mb-3">
-                        #{company.rank}
+                      {/* Rank Badge + Related Badge */}
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="inline-flex items-center justify-center bg-[#3B82F6] text-white text-sm font-bold rounded px-2 py-1">
+                          #{company.rank}
+                        </div>
+                        {company.relatedCount > 0 && (
+                          <div className="inline-flex items-center gap-1 bg-[#DCFCE7] text-[#15803D] text-xs font-semibold rounded-full px-2.5 py-1">
+                            <span>👥</span>
+                            <span>{company.relatedCount} connection{company.relatedCount !== 1 ? 's' : ''}</span>
+                          </div>
+                        )}
                       </div>
 
                       {/* Company Name */}
@@ -1115,33 +1443,33 @@ const Dashboard = () => {
                           {company.name}
                         </h3>
                         <a
-                            href={`https://google.com/search?q=${encodeURIComponent(company.name)}+careers`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            className="flex items-center gap-1 group cursor-pointer"
-                          >
-                            {/* Icon */}
-                            <ExternalLink
-                              className="
+                          href={`https://google.com/search?q=${encodeURIComponent(company.name)}+careers`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="flex items-center gap-1 group cursor-pointer"
+                        >
+                          {/* Icon */}
+                          <ExternalLink
+                            className="
                                 w-4 h-4 text-gray-500
                                 transition-all duration-200
                                 group-hover:-translate-x-1
                               "
-                            />
-                          
-                            {/* Careers text */}
-                            <span
-                              className="
+                          />
+
+                          {/* Careers text */}
+                          <span
+                            className="
                                 text-sm text-gray-600
                                 opacity-0 max-w-0 overflow-hidden
                                 transition-all duration-200
                                 group-hover:opacity-100 group-hover:max-w-[80px]
                               "
-                            >
-                              Careers
-                            </span>
-                          </a>
+                          >
+                            Careers
+                          </span>
+                        </a>
 
                       </div>
 
@@ -1201,14 +1529,14 @@ const Dashboard = () => {
               </>
             )}
             {/* 2nd Transitions Section */}
-            {filteredCompaniesSecond.length > 0 && (
+            {(filteredCompaniesSecond ?? []).length > 0 && (
               <>
                 <div className="flex items-center justify-between mt-10 mb-6 bg-[#F3E8FF] px-6 py-4 rounded-lg">
                   <h2 className="text-lg font-semibold text-[#1C1917]">
                     2nd Transitions
                   </h2>
                   <span className="text-sm text-[#78716C]">
-                    {filteredCompaniesSecond.length} companies
+                    {(filteredCompaniesSecond ?? []).length} companies
                   </span>
                 </div>
 
@@ -1225,7 +1553,10 @@ const Dashboard = () => {
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.05, duration: 0.4 }}
                       whileHover={{ y: -4 }}
-                      className="bg-white border border-[#E7E5E4] rounded-xl p-6 hover:shadow-md transition-all cursor-pointer"
+                      className={`bg-white border ${appliedConnectionFilters || isOrgHighlighted(company.organizationId)
+                        ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100'
+                        : 'border-[#E7E5E4]'
+                        } rounded-xl p-6 hover:shadow-md transition-all cursor-pointer`}
                       onClick={() => {
                         incrementActivationCounter('company_card_clicks', false);
                         incrementActivationCounter('company_cards_opened');
@@ -1239,12 +1570,21 @@ const Dashboard = () => {
                             startYear: searchParams.startYear,
                             endYear: searchParams.endYear,
                             role: contextRole,
+                            relatedBackground: company.relatedBackground,
                           },
                         });
                       }}
                     >
-                      <div className="inline-flex items-center justify-center bg-[#A855F7] text-white text-sm font-bold rounded px-2 py-1 mb-3">
-                        #{company.rank}
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="inline-flex items-center justify-center bg-[#A855F7] text-white text-sm font-bold rounded px-2 py-1">
+                          #{company.rank}
+                        </div>
+                        {company.relatedCount > 0 && (
+                          <div className="inline-flex items-center gap-1 bg-[#DCFCE7] text-[#15803D] text-xs font-semibold rounded-full px-2.5 py-1">
+                            <span>👥</span>
+                            <span>{company.relatedCount} connection{company.relatedCount !== 1 ? 's' : ''}</span>
+                          </div>
+                        )}
                       </div>
 
                       <div className="flex items-start gap-2 mb-4">
@@ -1331,14 +1671,14 @@ const Dashboard = () => {
             )}
 
             {/* 3+ Transitions Section */}
-            {filteredCompaniesThird.length > 0 && (
+            {(filteredCompaniesThird ?? []).length > 0 && (
               <>
                 <div className="flex items-center justify-between mt-10 mb-6 bg-[#D1FAE5] px-6 py-4 rounded-lg">
                   <h2 className="text-lg font-semibold text-[#1C1917]">
                     3+ Transitions
                   </h2>
                   <span className="text-sm text-[#78716C]">
-                    {filteredCompaniesThird.length} companies
+                    {(filteredCompaniesThird ?? []).length} companies
                   </span>
                 </div>
 
@@ -1355,7 +1695,7 @@ const Dashboard = () => {
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.05, duration: 0.4 }}
                       whileHover={{ y: -4 }}
-                      className={`bg-white border ${isOrgHighlighted(company.organizationId)
+                      className={`bg-white border ${appliedConnectionFilters || isOrgHighlighted(company.organizationId)
                         ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100'
                         : 'border-[#E7E5E4]'
                         } rounded-xl p-6 hover:shadow-md transition-all cursor-pointer`}
@@ -1372,6 +1712,7 @@ const Dashboard = () => {
                             startYear: searchParams.startYear,
                             endYear: searchParams.endYear,
                             role: contextRole,
+                            relatedBackground: relatedByDest[company.organizationId] ?? null,
                           },
                         });
                       }}
@@ -1475,10 +1816,10 @@ const Dashboard = () => {
           <div className="space-y-6">
             <div className="flex items-center justify-between mb-6 bg-[#F1F5F9] px-6 py-4 rounded-lg">
               <h2 className="text-lg font-semibold text-[#1C1917]">
-                Alumni ({filteredAlumni.length})
+                Alumni ({(filteredAlumni ?? []).length})
               </h2>
               <span className="text-sm text-[#78716C]">
-                Showing currently {filteredAlumni.length} alumni
+                Showing currently {(filteredAlumni ?? []).length} alumni
               </span>
             </div>
 
@@ -1499,7 +1840,7 @@ const Dashboard = () => {
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: index * 0.05, duration: 0.4 }}
-                    className="bg-white border border-[#E7E5E4] rounded-xl p-6 hover:shadow-md transition-all shadow-sm"
+                    className={`bg-white border rounded-xl p-6 hover:shadow-md transition-all shadow-sm ${appliedConnectionFilters ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100' : 'border-[#E7E5E4]'}`}
                   >
                     <h3 className="text-lg font-bold text-[#1C1917] mb-1" style={{ fontFamily: "'Playfair Display', serif" }}>
                       {person.name}
@@ -1509,7 +1850,7 @@ const Dashboard = () => {
                     </p>
 
                     <div className="space-y-2">
-                      {person.path && person.path.length > 0 ? (
+                      {person.path && Array.isArray(person.path) && person.path.length > 0 ? (
                         person.path.map((company, i) => (
                           <div key={i} className="flex items-start gap-2">
                             <div className="w-1 h-1 rounded-full bg-[#78716C] mt-2 flex-shrink-0" />
@@ -1533,7 +1874,7 @@ const Dashboard = () => {
               </motion.div>
             )}
 
-            {alumni.length === 0 && !loadingAlumni && (
+            {(alumni ?? []).length === 0 && !loadingAlumni && (
               <div className="text-center py-24">
                 <p className="text-[#78716C]">No alumni data found for this period.</p>
               </div>

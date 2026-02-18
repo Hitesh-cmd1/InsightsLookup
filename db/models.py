@@ -142,6 +142,7 @@ class TrueOrganization(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False, unique=True)
+    matched_org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
 
     experiences = relationship("TrueExperience", back_populates="organization")
 
@@ -160,6 +161,7 @@ class TrueSchool(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False, unique=True)
+    matched_school_id = Column(Integer, ForeignKey("schools.id"), nullable=True)
 
     educations = relationship("TrueEducation", back_populates="school")
 

@@ -2,6 +2,7 @@ from datetime import date, datetime, timedelta, timezone
 import random
 import os
 import smtplib
+import threading
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from functools import wraps
@@ -12,6 +13,7 @@ from flask import Flask, jsonify, request, send_file
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from sqlalchemy import func
+from rapidfuzz import process, fuzz
 
 from db.models import (
     get_db,
@@ -28,6 +30,9 @@ from db.models import (
     TrueEducation,
     TrueSkill,
     SessionLocal,
+    Employee,
+    School,
+    Education,
 )
 from pipeline.format_data import parse_resume_for_user
 from pipeline.save import parse_tenure, parse_degree
@@ -42,7 +47,7 @@ JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "your-super-secret-key-change-
 limiter = Limiter(
     key_func=get_remote_address,
     app=app,
-    default_limits=["500 per day", "100 per hour"],
+    default_limits=["500 per day", "200 per hour"],
     storage_uri="memory://",
 )
 
@@ -64,6 +69,13 @@ def _add_cors(resp):
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     resp.headers["Access-Control-Allow-Credentials"] = "true"
     return resp
+
+@app.route("/<path:path>", methods=["OPTIONS"])
+@app.route("/", methods=["OPTIONS"])
+def handle_options(path=""):
+    """Handle CORS preflight requests from browser when calling Flask directly (cross-origin)."""
+    return "", 204
+
 
 def token_required(f):
     @wraps(f)
@@ -93,8 +105,8 @@ def token_required(f):
 
 
 def send_otp_email(receiver_email, otp_code):
-    sender_email = "insightslookup@gmail.com"
-    sender_password = "chxh lmbs fuhb ertp"
+    sender_email = os.environ.get("SMTP_EMAIL", "insightslookup@gmail.com")
+    sender_password = os.environ.get("SMTP_PASSWORD", "chxh lmbs fuhb ertp")
 
     if not sender_email or not sender_password:
         print("SMTP_EMAIL or SMTP_PASSWORD not set. Cannot send email.")
@@ -124,9 +136,11 @@ def send_otp_email(receiver_email, otp_code):
     message.attach(MIMEText(html, "html"))
 
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        # Use a 10-second timeout to avoid blocking the thread indefinitely
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
             server.login(sender_email, sender_password)
             server.sendmail(sender_email, receiver_email, message.as_string())
+        print(f"Email sent successfully to {receiver_email}")
         return True
     except Exception as e:
         print(f"Error sending email: {e}")
@@ -186,15 +200,16 @@ def request_otp():
             db.add(new_otp)
         
         db.commit()
-        # In a real app, send actual email. For now, we print to console.
         print(f"DEBUG: OTP for {email} is {code}")
-        
-        # Send actual SMTP email
-        sent = send_otp_email(email, code)
-        if not sent:
-             # If email fails but we have no credentials, we still log for debug
-             # but maybe notify the client that delivery might be delayed if we expect it to work.
-             pass
+
+        # Send email in a background thread so the HTTP response is returned immediately
+        # without blocking on the SMTP connection (which was causing the request to hang)
+        email_thread = threading.Thread(
+            target=send_otp_email,
+            args=(email, code),
+            daemon=True
+        )
+        email_thread.start()
 
         return jsonify({"message": "OTP sent successfully"}), 200
 
@@ -276,6 +291,385 @@ def parse_date(date_str: str | None):
         return None
 
 
+def _parse_connection_filters():
+    """Parse connection_filters from request (JSON). Returns None if missing/invalid."""
+    raw = request.args.get("connection_filters")
+    if not raw:
+        return None
+    try:
+        import json
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return None
+        return {
+            "past_companies": list(data.get("past_companies") or []) if isinstance(data.get("past_companies"), list) else [],
+            "past_roles": list(data.get("past_roles") or []) if isinstance(data.get("past_roles"), list) else [],
+            "tenure_options": list(data.get("tenure_options") or []) if isinstance(data.get("tenure_options"), list) else [],
+            "colleges": list(data.get("colleges") or []) if isinstance(data.get("colleges"), list) else [],
+            "departments": list(data.get("departments") or []) if isinstance(data.get("departments"), list) else [],
+            "batch_options": list(data.get("batch_options") or []) if isinstance(data.get("batch_options"), list) else [],
+        }
+    except Exception:
+        return None
+
+
+def _get_user_profile_filter_data(db, user_id):
+    """Load current user's profile for connection filtering: companies, roles, colleges, degrees, and stints."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return None
+    _ = user.true_experiences, user.true_educations
+    company_stints = []
+    company_names = set()
+    role_names = set()
+    for te in user.true_experiences:
+        org_name = te.organization.name if te.organization else None
+        role_name = te.role.name if te.role else None
+        if org_name:
+            company_names.add(org_name)
+        if role_name:
+            role_names.add(role_name)
+        if org_name and (te.start_date or te.end_date):
+            company_stints.append({
+                "company": org_name,
+                "start": te.start_date,
+                "end": te.end_date,
+            })
+    education_stints = []
+    college_names = set()
+    degree_names = set()
+    for ed in user.true_educations:
+        school_name = ed.school.name if ed.school else None
+        deg = (ed.degree or "").strip()
+        if school_name:
+            college_names.add(school_name)
+        if deg:
+            degree_names.add(deg)
+        if school_name:
+            education_stints.append({
+                "college": school_name,
+                "degree": deg,
+                "start_year": ed.start_date.year if ed.start_date else None,
+                "end_year": ed.end_date.year if ed.end_date else None,
+            })
+    return {
+        "company_names": company_names,
+        "role_names": role_names,
+        "company_stints": company_stints,
+        "college_names": college_names,
+        "degree_names": degree_names,
+        "education_stints": education_stints,
+    }
+
+
+def _alumni_pass_connection_filters(db, user_id, employee_ids, exps_by_emp, edus_by_emp, filters):
+    """
+    Return set of employee_ids that pass the connection filters.
+    filters: dict with past_companies, past_roles, tenure_options, colleges, departments, batch_options (lists).
+    Logic: (past_company OR) AND (past_role OR) AND (tenure OR) AND (college OR) AND (dept OR) AND (batch OR).
+    """
+    if not filters or not employee_ids:
+        return set(employee_ids)
+    profile = _get_user_profile_filter_data(db, user_id)
+    if not profile:
+        return set(employee_ids)
+
+    past_companies = [str(x).strip() for x in (filters.get("past_companies") or []) if x]
+    past_roles = [str(x).strip() for x in (filters.get("past_roles") or []) if x]
+    tenure_opts = list(filters.get("tenure_options") or [])
+    colleges = [str(x).strip() for x in (filters.get("colleges") or []) if x]
+    departments = [str(x).strip() for x in (filters.get("departments") or []) if x]
+    batch_opts = list(filters.get("batch_options") or [])
+
+    user_stints_by_company = {s["company"]: (s["start"], s["end"]) for s in profile["company_stints"]}
+    user_edu_ranges = profile["education_stints"]
+
+    def tenure_matches(alumni_start, alumni_end, user_start, user_end, option):
+        if option == "any-time":
+            return True
+        if not user_start and not user_end:
+            return True
+        if option == "with-me":
+            if not alumni_start or not alumni_end:
+                return False
+            return (alumni_start < (user_end or date.max)) and ((alumni_end or date.min) > (user_start or date.min))
+        if option == "near-me":
+            if not alumni_end:
+                return False
+            low = (user_start or date.min) - timedelta(days=365 * 2) if user_start else date.min
+            high = (user_end or date.max) + timedelta(days=365 * 2) if user_end else date.max
+            return low <= alumni_end <= high
+        return False
+
+    def batch_matches(alumni_start_year, alumni_end_year, alumni_school_name):
+        if not batch_opts or "any" in batch_opts:
+            return True
+        for u in user_edu_ranges:
+            if u["college"] != alumni_school_name:
+                continue
+            u_start = u["start_year"]
+            u_end = u["end_year"]
+            if "exact" in batch_opts and alumni_start_year == u_start and alumni_end_year == u_end:
+                return True
+            if "close" in batch_opts and u_start is not None and alumni_start_year is not None:
+                if abs(alumni_start_year - u_start) <= 4:
+                    return True
+        if "any" in batch_opts:
+            return True
+        return False
+
+    org_names = {}
+    role_names = {}
+    if exps_by_emp:
+        all_org_ids = set()
+        all_role_ids = set()
+        for exps in exps_by_emp.values():
+            for e in exps:
+                if e.organization_id:
+                    all_org_ids.add(e.organization_id)
+                if e.role_id:
+                    all_role_ids.add(e.role_id)
+        if all_org_ids:
+            for o in db.query(Organization).filter(Organization.id.in_(all_org_ids)).all():
+                org_names[o.id] = o.name
+        if all_role_ids:
+            for r in db.query(Role).filter(Role.id.in_(all_role_ids)).all():
+                role_names[r.id] = r.name
+
+    school_names = {}
+    if edus_by_emp:
+        all_school_ids = set()
+        for edus in edus_by_emp.values():
+            for e in edus:
+                if e.school_id:
+                    all_school_ids.add(e.school_id)
+        if all_school_ids:
+            for s in db.query(School).filter(School.id.in_(all_school_ids)).all():
+                school_names[s.id] = s.name
+
+    has_work_filters = bool(past_companies or past_roles or (tenure_opts and "any-time" not in tenure_opts))
+    has_edu_filters = bool(colleges or departments or (batch_opts and "any" not in batch_opts))
+
+    passing = set()
+    for emp_id in employee_ids:
+        emp_exps = exps_by_emp.get(emp_id, [])
+        emp_edus = edus_by_emp.get(emp_id, [])
+
+        # --- Check Work Section ---
+        work_match = False
+        if has_work_filters:
+            for exp in emp_exps:
+                org_name = org_names.get(exp.organization_id, "")
+                role_name = role_names.get(exp.role_id, "")
+                
+                # Check company (if any selected)
+                comp_ok = not past_companies or (org_name in past_companies)
+                # Check role (if any selected)
+                role_ok = not past_roles or (role_name in past_roles)
+                # Check tenure (if any selected)
+                tenure_ok = not tenure_opts or "any-time" in tenure_opts
+                if tenure_opts and "any-time" not in tenure_opts:
+                    user_start, user_end = user_stints_by_company.get(org_name, (None, None))
+                    for opt in tenure_opts:
+                        if tenure_matches(exp.start_date, exp.end_date, user_start, user_end, opt):
+                            tenure_ok = True
+                            break
+                
+                if comp_ok and role_ok and tenure_ok:
+                    # In work section, we match if ANY experience matches the selected filters
+                    work_match = True
+                    break
+        
+        # --- Check Education Section ---
+        edu_match = False
+        if has_edu_filters:
+            for edu in emp_edus:
+                school_name = school_names.get(edu.school_id, "")
+                deg = (edu.degree or "").strip()
+                start_y = edu.start_date.year if edu.start_date else None
+                end_y = edu.end_date.year if edu.end_date else None
+                
+                school_ok = not colleges or (school_name in colleges)
+                dept_ok = not departments or (deg in departments)
+                batch_ok = not batch_opts or "any" in batch_opts or batch_matches(start_y, end_y, school_name)
+                
+                if school_ok and dept_ok and batch_ok:
+                    edu_match = True
+                    break
+
+        # --- OR Logic Between Sections ---
+        if has_work_filters and has_edu_filters:
+            if work_match or edu_match:
+                passing.add(emp_id)
+        elif has_work_filters:
+            if work_match:
+                passing.add(emp_id)
+        elif has_edu_filters:
+            if edu_match:
+                passing.add(emp_id)
+        else:
+            # No filters selected, everyone passes
+            passing.add(emp_id)
+    return passing if (past_companies or past_roles or tenure_opts or colleges or departments or batch_opts) else set(employee_ids)
+
+
+@app.get("/dashboard-data")
+@token_required
+def dashboard_data():
+    """
+    GET /dashboard-data?org_id=...&start_date=...&end_date=...
+
+    Returns in one response: filter_options (from profile), org-transitions, and alumni.
+    Use when profile is filled to load dashboard quickly. Transitions and alumni are unfiltered.
+    """
+    org_id = request.args.get("org_id", type=int)
+    if not org_id:
+        return jsonify({"error": "Missing required query parameter 'org_id' (int)"}), 400
+    start_date_str = request.args.get("start_date")
+    end_date_str = request.args.get("end_date")
+    hops = request.args.get("hops", type=int, default=3)
+    role_filter = request.args.get("role", type=str)
+    user_id = request.current_user.get("id") if getattr(request, "current_user", None) else None
+
+    start_date = parse_date(start_date_str)
+    end_date = parse_date(end_date_str) if end_date_str else date.today()
+
+    for db in get_db():
+        filter_options = {"companies": [], "roles": [], "colleges": [], "departments": []}
+        if user_id:
+            user = db.query(User).filter(User.id == user_id).first()
+            if user:
+                _ = user.true_experiences, user.true_educations
+                seen_c, seen_r, seen_col, seen_d = set(), set(), set(), set()
+                for te in user.true_experiences:
+                    if te.organization and te.organization.name not in seen_c:
+                        filter_options["companies"].append(te.organization.name)
+                        seen_c.add(te.organization.name)
+                    if te.role and te.role.name not in seen_r:
+                        filter_options["roles"].append(te.role.name)
+                        seen_r.add(te.role.name)
+                for ed in user.true_educations:
+                    if ed.school and ed.school.name not in seen_col:
+                        filter_options["colleges"].append(ed.school.name)
+                        seen_col.add(ed.school.name)
+                    if ed.degree and (ed.degree or "").strip() and (ed.degree or "").strip() not in seen_d:
+                        filter_options["departments"].append((ed.degree or "").strip())
+                        seen_d.add((ed.degree or "").strip())
+
+        # Reuse org_transitions logic without connection_filters to get transitions
+        matching_role_ids = set()
+        if role_filter:
+            matching_roles = db.query(Role).filter(Role.name.ilike(f"%{role_filter.strip()}%")).all()
+            matching_role_ids = {r.id for r in matching_roles}
+
+        exit_query = db.query(Experience).filter(
+            Experience.organization_id == org_id,
+            Experience.end_date.isnot(None),
+        )
+        if start_date:
+            exit_query = exit_query.filter(Experience.end_date >= start_date)
+        if end_date:
+            exit_query = exit_query.filter(Experience.end_date <= end_date)
+        exit_stints = exit_query.all()
+        if not exit_stints:
+            return jsonify({
+                "filter_options": filter_options,
+                "transitions": {},
+                "alumni": [],
+                "related_by_dest": {},
+            })
+
+        employee_ids = list(set(e.employee_id for e in exit_stints))
+        all_exps = (
+            db.query(Experience)
+            .filter(
+                Experience.employee_id.in_(employee_ids),
+                Experience.organization_id.isnot(None),
+            )
+            .order_by(Experience.employee_id, Experience.start_date, Experience.id)
+            .all()
+        )
+        exps_by_emp = {}
+        for exp in all_exps:
+            exps_by_emp.setdefault(exp.employee_id, []).append(exp)
+
+        hop_counts = {}
+        role_match_org_ids = set()
+        transition_emp_ids_by_org = {}  # {org_id: set(emp_ids)}
+        for exit_stint in exit_stints:
+            emp_exps = exps_by_emp.get(exit_stint.employee_id, [])
+            subsequent = [
+                e for e in emp_exps
+                if e.start_date and e.start_date >= exit_stint.end_date and e.id != exit_stint.id
+            ]
+            subsequent.sort(key=lambda x: (x.start_date, x.id))
+            unique_hops = []
+            for job in subsequent:
+                if not unique_hops or job.organization_id != unique_hops[-1]["org_id"]:
+                    unique_hops.append({"org_id": job.organization_id, "start_date": job.start_date, "role_ids": {job.role_id} if job.role_id else set()})
+                elif job.role_id:
+                    unique_hops[-1]["role_ids"].add(job.role_id)
+            while unique_hops and unique_hops[0]["org_id"] == org_id:
+                unique_hops.pop(0)
+            for hop_idx, h_data in enumerate(unique_hops[:hops], start=1):
+                if hop_idx not in hop_counts:
+                    hop_counts[hop_idx] = {}
+                oid = h_data["org_id"]
+                transition_emp_ids_by_org.setdefault(oid, set()).add(exit_stint.employee_id)
+                if oid not in hop_counts[hop_idx]:
+                    hop_counts[hop_idx][oid] = {"count": 0, "years": set()}
+                hop_counts[hop_idx][oid]["count"] += 1
+                if h_data["start_date"]:
+                    hop_counts[hop_idx][oid]["years"].add(h_data["start_date"].year)
+                if matching_role_ids and any(rid in matching_role_ids for rid in h_data["role_ids"]):
+                    role_match_org_ids.add(oid)
+
+        all_dest_org_ids = set()
+        for hop_map in hop_counts.values():
+            all_dest_org_ids.update(hop_map.keys())
+        org_name_by_id = {}
+        if all_dest_org_ids:
+            for o in db.query(Organization).filter(Organization.id.in_(all_dest_org_ids)).all():
+                org_name_by_id[o.id] = o.name
+        total_counts_by_org_id = {}
+        for hop_map in hop_counts.values():
+            for oid, data in hop_map.items():
+                total_counts_by_org_id[oid] = total_counts_by_org_id.get(oid, 0) + data["count"]
+
+        transitions = {}
+        for hop_num, org_map in sorted(hop_counts.items()):
+            sorted_orgs = sorted(org_map.items(), key=lambda x: (-x[1]["count"], org_name_by_id.get(x[0], "")))
+            transitions[str(hop_num)] = [
+                {
+                    "organization_id": oid,
+                    "organization": org_name_by_id.get(oid, "Unknown"),
+                    "count": data["count"],
+                    "total_count": total_counts_by_org_id.get(oid, data["count"]),
+                    "years": sorted(list(data["years"])),
+                    "role_match": oid in role_match_org_ids,
+                }
+                for oid, data in sorted_orgs
+            ]
+
+        # Alumni list (now fetched on-demand by /alumni endpoint)
+        alumni_list = []
+
+        # Compute related background counts for all dest orgs (batch, efficient)
+        related_by_dest_raw = _compute_related_counts_for_dests(db, all_dest_org_ids, user_id, transition_emp_ids_by_org)
+        # Serialize: keys must be strings for JSON, values keep count + related list
+        related_by_dest = {
+            str(org_id): {"count": v["count"], "related": v["related"]}
+            for org_id, v in related_by_dest_raw.items()
+        }
+
+        return jsonify({
+            "filter_options": filter_options,
+            "transitions": transitions,
+            "alumni": alumni_list,
+            "related_by_dest": related_by_dest,
+        })
+
+
 @app.get("/organizations")
 def search_organizations():
     """
@@ -338,6 +732,7 @@ def search_organizations():
                     "alumni_count": alumni_count_by_org.get(org.id, 0),
                 }
                 for org in matches
+                if alumni_count_by_org.get(org.id, 0) > 15
             ]
         )
 
@@ -373,6 +768,10 @@ def org_transitions():
     end_date_str = request.args.get("end_date")
     hops = request.args.get("hops", type=int, default=3)
     role_filter = request.args.get("role", type=str)
+    include_related = request.args.get("include_related", type=str, default="")
+    include_related = str(include_related).strip().lower() in ("1", "true", "yes")
+    connection_filters = _parse_connection_filters()
+    user_id = request.current_user.get("id") if getattr(request, "current_user", None) else None
 
     start_date = parse_date(start_date_str)
     end_date = parse_date(end_date_str) if end_date_str else date.today()
@@ -410,7 +809,7 @@ def org_transitions():
             return jsonify({})
 
         # Get all employee IDs who exited
-        employee_ids = [e.employee_id for e in exit_stints]
+        employee_ids = list(set(e.employee_id for e in exit_stints))
 
         # 2) Fetch all experiences for these employees
         all_exps = (
@@ -428,13 +827,34 @@ def org_transitions():
         for exp in all_exps:
             exps_by_emp.setdefault(exp.employee_id, []).append(exp)
 
+        # Connection filters: load educations and filter alumni
+        passing_employee_ids = set(employee_ids)
+        if connection_filters and user_id:
+            all_edus = (
+                db.query(Education)
+                .filter(Education.employee_id.in_(employee_ids))
+                .all()
+            )
+            edus_by_emp = {}
+            for edu in all_edus:
+                edus_by_emp.setdefault(edu.employee_id, []).append(edu)
+            for eid in employee_ids:
+                if eid not in edus_by_emp:
+                    edus_by_emp[eid] = []
+            passing_employee_ids = _alumni_pass_connection_filters(
+                db, user_id, employee_ids, exps_by_emp, edus_by_emp, connection_filters
+            )
+
         # Track transitions: {hop_number: {org_id: {"count": N, "years": [2020, 2021, ...]}}}
         hop_counts = {}
         # Track which destination orgs have at least one hire into a role
         # matching the optional role filter (across any hop).
         role_match_org_ids: set[int] = set()
+        transition_emp_ids_by_org = {}  # {org_id: set(emp_ids)}
 
         for exit_stint in exit_stints:
+            if exit_stint.employee_id not in passing_employee_ids:
+                continue
             emp_id = exit_stint.employee_id
             exit_end = exit_stint.end_date
 
@@ -477,6 +897,7 @@ def org_transitions():
                 if hop_idx not in hop_counts:
                     hop_counts[hop_idx] = {}
                 org_id_dest = h_data["org_id"]
+                transition_emp_ids_by_org.setdefault(org_id_dest, set()).add(emp_id)
                 if org_id_dest not in hop_counts[hop_idx]:
                     hop_counts[hop_idx][org_id_dest] = {"count": 0, "years": set()}
                 hop_counts[hop_idx][org_id_dest]["count"] += 1
@@ -530,6 +951,18 @@ def org_transitions():
                 }
                 for org_id, data in sorted_orgs
             ]
+
+        if include_related and user_id:
+            # Batch-compute related background counts for all dest orgs
+            all_dest_org_ids_set = set()
+            for hop_map in hop_counts.values():
+                all_dest_org_ids_set.update(hop_map.keys())
+            related_by_dest_raw = _compute_related_counts_for_dests(db, all_dest_org_ids_set, user_id, transition_emp_ids_by_org)
+            related_by_dest = {
+                str(org_id): {"count": v["count"], "related": v["related"]}
+                for org_id, v in related_by_dest_raw.items()
+            }
+            result["related_by_dest"] = related_by_dest
 
         return jsonify(result)
 
@@ -755,9 +1188,10 @@ def employee_transitions():
 @token_required
 def get_alumni():
     """
-    GET /alumni?org_id=...&start_date=...&end_date=...
+    GET /alumni?org_id=...&start_date=...&end_date=...&connection_filters=...
 
-    Returns all employees who worked at the organization and their career paths.
+    Returns employees who worked at the organization and their career paths.
+    Optional connection_filters (JSON) filters by profile-based connections.
     """
     org_id = request.args.get("org_id", type=int)
     if not org_id:
@@ -765,6 +1199,8 @@ def get_alumni():
 
     start_date_str = request.args.get("start_date")
     end_date_str = request.args.get("end_date")
+    connection_filters = _parse_connection_filters()
+    user_id = request.current_user.get("id") if getattr(request, "current_user", None) else None
 
     start_date = parse_date(start_date_str)
     end_date = parse_date(end_date_str) if end_date_str else date.today()
@@ -787,7 +1223,6 @@ def get_alumni():
         employee_ids = list(set(e.employee_id for e in exit_stints))
 
         # 2) Fetch all experiences and employee names
-        from db.models import Employee, School
         employees = db.query(Employee).filter(Employee.id.in_(employee_ids)).all()
         emp_name_by_id = {e.id: e.name for e in employees}
 
@@ -810,8 +1245,28 @@ def get_alumni():
         for exp in all_exps:
             exps_by_emp.setdefault(exp.employee_id, []).append(exp)
 
+        # Connection filters: load educations and filter alumni
+        passing_employee_ids = set(employee_ids)
+        if connection_filters and user_id:
+            all_edus = (
+                db.query(Education)
+                .filter(Education.employee_id.in_(employee_ids))
+                .all()
+            )
+            edus_by_emp = {}
+            for edu in all_edus:
+                edus_by_emp.setdefault(edu.employee_id, []).append(edu)
+            for eid in employee_ids:
+                if eid not in edus_by_emp:
+                    edus_by_emp[eid] = []
+            passing_employee_ids = _alumni_pass_connection_filters(
+                db, user_id, employee_ids, exps_by_emp, edus_by_emp, connection_filters
+            )
+
         alumni_list = []
         for emp_id in employee_ids:
+            if emp_id not in passing_employee_ids:
+                continue
             emp_exps = exps_by_emp.get(emp_id, [])
             # Find the exit from our target org
             target_exit = next((e for e in exit_stints if e.employee_id == emp_id), None)
@@ -850,9 +1305,440 @@ def get_alumni():
         return jsonify(alumni_list)
 
 
-def _get_or_create_true_lookup(session, model, name_field, name_value):
+def _get_user_matched_ids(db, user_id):
+    """
+    Returns (org_ids: set[int], school_ids: set[int]) from the user's true_organizations
+    and true_schools via their matched_org_id / matched_school_id columns.
+    These are already resolved IDs into the scraped organizations/schools tables.
+    Falls back to name-based lookup if matched_*_id is NULL.
+    """
+    if not user_id:
+        return set(), set()
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return set(), set()
+
+    # Load true_experiences → true_organizations → matched_org_id
+    _ = user.true_experiences, user.true_educations
+
+    org_ids = set()
+    unmatched_org_names = set()
+    for te in user.true_experiences:
+        if te.organization:
+            if te.organization.matched_org_id:
+                org_ids.add(te.organization.matched_org_id)
+            else:
+                unmatched_org_names.add(te.organization.name)
+
+    school_ids = set()
+    unmatched_school_names = set()
+    for ed in user.true_educations:
+        if ed.school:
+            if ed.school.matched_school_id:
+                school_ids.add(ed.school.matched_school_id)
+            else:
+                unmatched_school_names.add(ed.school.name)
+
+    # Fallback: name-based lookup for unmatched entries
+    if unmatched_org_names:
+        for o in db.query(Organization).filter(Organization.name.in_(unmatched_org_names)).all():
+            org_ids.add(o.id)
+    if unmatched_school_names:
+        for s in db.query(School).filter(School.name.in_(unmatched_school_names)).all():
+            school_ids.add(s.id)
+
+    return org_ids, school_ids
+
+
+def _compute_related_counts_for_dests(db, dest_org_ids, user_id, exclude_emp_ids_by_org=None):
+    """
+    For a set of destination org IDs, find current employees (end_date IS NULL) who share
+    the user's background (worked at any of user's true_organizations OR studied at any of
+    user's true_schools). Returns a dict:
+        { dest_org_id: {"count": N, "related": [{"employee_id", "employee_name",
+                         "connection_type", "experience_history"}, ...]} }
+
+    This is the batch version used to sort and annotate company cards on the dashboard.
+    exclude_emp_ids_by_org (dict): {org_id: set(emp_ids)} to exclude from related results.
+    """
+    if not dest_org_ids or not user_id:
+        return {}
+
+    org_ids_user, school_ids_user = _get_user_matched_ids(db, user_id)
+    if not org_ids_user and not school_ids_user:
+        return {}
+
+    dest_org_ids = set(dest_org_ids)
+
+    # Step 1: Get all current employees at any of the dest orgs (end_date IS NULL)
+    current_rows = (
+        db.query(Experience.employee_id, Experience.organization_id)
+        .filter(
+            Experience.organization_id.in_(dest_org_ids),
+            Experience.end_date.is_(None),
+        )
+        .distinct()
+        .all()
+    )
+    if not current_rows:
+        return {}
+
+    # Map: employee_id -> set of dest_org_ids they currently work at
+    emp_to_dest_orgs = {}
+    all_current_emp_ids = set()
+    for emp_id, org_id in current_rows:
+        # Check if we should exclude this employee for this destination
+        if exclude_emp_ids_by_org and emp_id in exclude_emp_ids_by_org.get(org_id, set()):
+            continue
+        emp_to_dest_orgs.setdefault(emp_id, set()).add(org_id)
+        all_current_emp_ids.add(emp_id)
+
+    if not all_current_emp_ids:
+        return {}
+
+    # Step 2: Check which of these employees share org background
+    emp_ids_with_company_match = set()
+    if org_ids_user:
+        company_match_rows = (
+            db.query(Experience.employee_id)
+            .filter(
+                Experience.employee_id.in_(all_current_emp_ids),
+                Experience.organization_id.in_(org_ids_user),
+            )
+            .distinct()
+            .all()
+        )
+        emp_ids_with_company_match = {row[0] for row in company_match_rows}
+
+    # Step 3: Check which share school background
+    emp_ids_with_school_match = set()
+    if school_ids_user:
+        school_match_rows = (
+            db.query(Education.employee_id)
+            .filter(
+                Education.employee_id.in_(all_current_emp_ids),
+                Education.school_id.in_(school_ids_user),
+            )
+            .distinct()
+            .all()
+        )
+        emp_ids_with_school_match = {row[0] for row in school_match_rows}
+
+    related_emp_ids = emp_ids_with_company_match | emp_ids_with_school_match
+    if not related_emp_ids:
+        return {}
+
+    # Step 4: Build per-dest counts
+    result = {}
+    for emp_id in related_emp_ids:
+        for dest_org_id in emp_to_dest_orgs.get(emp_id, set()):
+            if dest_org_id not in result:
+                result[dest_org_id] = {"count": 0, "emp_ids": set(),
+                                       "emp_ids_company": set(), "emp_ids_school": set()}
+            result[dest_org_id]["count"] += 1
+            result[dest_org_id]["emp_ids"].add(emp_id)
+            if emp_id in emp_ids_with_company_match:
+                result[dest_org_id]["emp_ids_company"].add(emp_id)
+            if emp_id in emp_ids_with_school_match:
+                result[dest_org_id]["emp_ids_school"].add(emp_id)
+
+    if not result:
+        return {}
+
+    # Step 5: Fetch employee names + full experience history for all related employees
+    employees = db.query(Employee).filter(Employee.id.in_(related_emp_ids)).all()
+    emp_name_by_id = {e.id: e.name for e in employees}
+
+    rel_exps = (
+        db.query(Experience)
+        .filter(
+            Experience.employee_id.in_(related_emp_ids),
+            Experience.organization_id.isnot(None),
+        )
+        .order_by(Experience.employee_id, Experience.start_date, Experience.id)
+        .all()
+    )
+    rel_org_ids = {e.organization_id for e in rel_exps if e.organization_id}
+    rel_role_ids = {e.role_id for e in rel_exps if e.role_id}
+    rel_org_names = {}
+    rel_role_names = {}
+    if rel_org_ids:
+        for o in db.query(Organization).filter(Organization.id.in_(rel_org_ids)).all():
+            rel_org_names[o.id] = o.name
+    if rel_role_ids:
+        for r in db.query(Role).filter(Role.id.in_(rel_role_ids)).all():
+            rel_role_names[r.id] = r.name
+    rel_exps_by_emp = {}
+    for exp in rel_exps:
+        rel_exps_by_emp.setdefault(exp.employee_id, []).append(exp)
+
+    # Step 6: Build final output per dest org
+    final = {}
+    for dest_org_id, data in result.items():
+        related_list = []
+        for eid in data["emp_ids"]:
+            in_company = eid in data["emp_ids_company"]
+            in_school = eid in data["emp_ids_school"]
+            if in_company and in_school:
+                conn_type = "past_company_and_college"
+            elif in_company:
+                conn_type = "past_company"
+            else:
+                conn_type = "college"
+            history = []
+            for exp in rel_exps_by_emp.get(eid, []):
+                history.append({
+                    "organization": rel_org_names.get(exp.organization_id, "Unknown"),
+                    "role": rel_role_names.get(exp.role_id) if exp.role_id else None,
+                    "start_date": exp.start_date.isoformat() if exp.start_date else None,
+                    "end_date": exp.end_date.isoformat() if exp.end_date else None,
+                })
+            related_list.append({
+                "employee_id": eid,
+                "employee_name": emp_name_by_id.get(eid, "Unknown"),
+                "connection_type": conn_type,
+                "experience_history": history,
+            })
+        related_list.sort(key=lambda x: x["employee_name"])
+        final[dest_org_id] = {
+            "count": data["count"],
+            "related": related_list,
+        }
+    return final
+
+
+def _compute_related_background(db, source_org_id, dest_org_id, start_date, end_date, user_id):
+    """
+    Returns {"transition_employee_ids": list[int], "related": list[dict]} for one (source, dest) pair.
+    Used by /related-background and by dashboard-data / org-transitions to include related for all dests.
+    """
+    if not user_id:
+        return {"transition_employee_ids": [], "related": []}
+    profile = _get_user_profile_filter_data(db, user_id)
+    user_company_names = set(profile["company_names"]) if profile else set()
+    user_school_names = set(profile["college_names"]) if profile else set()
+
+    # 1) Get transition employee IDs (people who moved source -> dest in period)
+    exit_query = db.query(Experience).filter(
+        Experience.organization_id == source_org_id,
+        Experience.end_date.isnot(None),
+    )
+    if start_date:
+        exit_query = exit_query.filter(Experience.end_date >= start_date)
+    if end_date:
+        exit_query = exit_query.filter(Experience.end_date <= end_date)
+    exit_stints = exit_query.all()
+    transition_employee_ids = set()
+    if exit_stints:
+        emp_ids = list(set(e.employee_id for e in exit_stints))
+        all_exps = (
+            db.query(Experience)
+            .filter(
+                Experience.employee_id.in_(emp_ids),
+                Experience.organization_id.isnot(None),
+            )
+            .order_by(Experience.employee_id, Experience.start_date)
+            .all()
+        )
+        exps_by_emp = {}
+        for exp in all_exps:
+            exps_by_emp.setdefault(exp.employee_id, []).append(exp)
+        for exit_stint in exit_stints:
+            emp_exps = exps_by_emp.get(exit_stint.employee_id, [])
+            subsequent = [
+                e for e in emp_exps
+                if e.start_date and e.start_date >= exit_stint.end_date and e.id != exit_stint.id
+            ]
+            subsequent.sort(key=lambda x: (x.start_date, x.id))
+            groups = []
+            for job in subsequent:
+                if not groups or job.organization_id != groups[-1][0].organization_id:
+                    groups.append([job])
+                else:
+                    groups[-1].append(job)
+            while groups and groups[0][0].organization_id == source_org_id:
+                groups.pop(0)
+            for hop_idx, grp in enumerate(groups, start=1):
+                if grp[0].organization_id == dest_org_id:
+                    transition_employee_ids.add(exit_stint.employee_id)
+                    break
+                if hop_idx >= 3:
+                    break
+
+    # 2) People who have an experience at dest_org (current or past)
+    dest_exps = (
+        db.query(Experience)
+        .filter(Experience.organization_id == dest_org_id)
+        .all()
+    )
+    emp_ids_at_dest = list(set(e.employee_id for e in dest_exps))
+    candidate_emp_ids = [eid for eid in emp_ids_at_dest if eid not in transition_employee_ids]
+    if not candidate_emp_ids:
+        return {"transition_employee_ids": list(transition_employee_ids), "related": []}
+
+    org_ids_user, school_ids_user = _get_user_matched_ids(db, user_id)
+    if not org_ids_user and not school_ids_user:
+        return {"transition_employee_ids": list(transition_employee_ids), "related": []}
+
+    all_exps_cand = (
+        db.query(Experience)
+        .filter(
+            Experience.employee_id.in_(candidate_emp_ids),
+            Experience.organization_id.isnot(None),
+        )
+        .all()
+    )
+    all_edus_cand = (
+        db.query(Education)
+        .filter(Education.employee_id.in_(candidate_emp_ids))
+        .all()
+    )
+    emp_ids_with_company_match = set()
+    emp_ids_with_school_match = set()
+    for exp in all_exps_cand:
+        if exp.organization_id and exp.organization_id in org_ids_user:
+            emp_ids_with_company_match.add(exp.employee_id)
+    for edu in all_edus_cand:
+        if edu.school_id and edu.school_id in school_ids_user:
+            emp_ids_with_school_match.add(edu.employee_id)
+
+    related_emp_ids = emp_ids_with_company_match | emp_ids_with_school_match
+
+    # NEW: keep only employees who are currently working at dest_org (end_date is NULL)
+    current_dest_emp_ids = (
+        db.query(Experience.employee_id)
+        .filter(
+            Experience.organization_id == dest_org_id,
+            Experience.end_date.is_(None),
+            Experience.employee_id.in_(related_emp_ids),
+        )
+        .distinct()
+        .all()
+    )
+    current_dest_emp_ids = {row[0] for row in current_dest_emp_ids}
+    related_emp_ids = related_emp_ids & current_dest_emp_ids
+
+    if not related_emp_ids:
+        return {"transition_employee_ids": list(transition_employee_ids), "related": []}
+
+    employees = db.query(Employee).filter(Employee.id.in_(related_emp_ids)).all()
+    emp_name_by_id = {e.id: e.name for e in employees}
+
+    rel_exps = (
+        db.query(Experience)
+        .filter(
+            Experience.employee_id.in_(related_emp_ids),
+            Experience.organization_id.isnot(None),
+        )
+        .order_by(Experience.employee_id, Experience.start_date, Experience.id)
+        .all()
+    )
+    rel_org_ids = set(e.organization_id for e in rel_exps if e.organization_id)
+    rel_role_ids = set(e.role_id for e in rel_exps if e.role_id)
+    rel_org_names = {}
+    rel_role_names = {}
+    if rel_org_ids:
+        for o in db.query(Organization).filter(Organization.id.in_(rel_org_ids)).all():
+            rel_org_names[o.id] = o.name
+    if rel_role_ids:
+        for r in db.query(Role).filter(Role.id.in_(rel_role_ids)).all():
+            rel_role_names[r.id] = r.name
+    rel_exps_by_emp = {}
+    for exp in rel_exps:
+        rel_exps_by_emp.setdefault(exp.employee_id, []).append(exp)
+
+    related_list = []
+    for eid in related_emp_ids:
+        connection_type = "past_company" if eid in emp_ids_with_company_match else "college"
+        if eid in emp_ids_with_company_match and eid in emp_ids_with_school_match:
+            connection_type = "past_company_and_college"
+        history = []
+        for exp in rel_exps_by_emp.get(eid, []):
+            history.append({
+                "organization": rel_org_names.get(exp.organization_id, "Unknown"),
+                "role": rel_role_names.get(exp.role_id, "Unknown") if exp.role_id else None,
+                "start_date": exp.start_date.isoformat() if exp.start_date else None,
+                "end_date": exp.end_date.isoformat() if exp.end_date else None,
+            })
+        related_list.append({
+            "employee_id": eid,
+            "employee_name": emp_name_by_id.get(eid, "Unknown"),
+            "connection_type": connection_type,
+            "experience_history": history,
+        })
+    related_list.sort(key=lambda x: x["employee_name"])
+    return {"transition_employee_ids": list(transition_employee_ids), "related": related_list}
+
+
+@app.get("/related-background")
+@token_required
+def related_background():
+    """
+    GET /related-background?source_org_id=...&dest_org_id=...&start_date=...&end_date=...
+
+    For a destination company, returns:
+    - transition_employee_ids: list of employee IDs who transitioned from source to dest (in the period).
+    - related: list of people at dest_org who did NOT transition from source but match the current user's
+      background (same past company or same college). Each item: { employee_id, employee_name, connection_type }.
+    """
+    source_org_id = request.args.get("source_org_id", type=int)
+    dest_org_id = request.args.get("dest_org_id", type=int)
+    start_date_str = request.args.get("start_date")
+    end_date_str = request.args.get("end_date")
+    if not source_org_id or not dest_org_id:
+        return jsonify({"error": "Missing source_org_id or dest_org_id"}), 400
+    start_date = parse_date(start_date_str)
+    end_date = parse_date(end_date_str) if end_date_str else date.today()
+    user_id = request.current_user.get("id") if getattr(request, "current_user", None) else None
+    if not user_id:
+        return jsonify({"transition_employee_ids": [], "related": []})
+
+    for db in get_db():
+        out = _compute_related_background(db, source_org_id, dest_org_id, start_date, end_date, user_id)
+        return jsonify(out)
+    return jsonify({"transition_employee_ids": [], "related": []})
+
+
+def _fuzzy_match_name(session, model, name_value, threshold=85, cache=None):
+    """
+    Fuzzy match a name against a reference model (Organization or School).
+    If cache is provided (dict {model: (names, ids)}), use it.
+    """
+    if not name_value:
+        return None
+    name_value = str(name_value).strip()
+    if not name_value:
+        return None
+
+    # Exact match first (fast)
+    exact = session.query(model.id).filter(func.lower(model.name) == name_value.lower()).first()
+    if exact:
+        return exact.id
+
+    # Fuzzy match
+    if cache is not None and model in cache:
+        names, ids = cache[model]
+    else:
+        all_refs = session.query(model.id, model.name).all()
+        names = [r.name for r in all_refs]
+        ids = [r.id for r in all_refs]
+        if cache is not None:
+            cache[model] = (names, ids)
+
+    if not names:
+        return None
+
+    match = process.extractOne(name_value, names, scorer=fuzz.WRatio)
+    if match and match[1] >= threshold:
+        return ids[match[2]]
+    return None
+
+
+def _get_or_create_true_lookup(session, model, name_field, name_value, reference_model=None, matched_id_field=None, cache=None):
     """
     get_or_create helper for true_* lookup tables.
+    Optionally performs fuzzy matching against a reference_model.
     """
     if not name_value or not str(name_value).strip():
         return None
@@ -860,10 +1746,24 @@ def _get_or_create_true_lookup(session, model, name_field, name_value):
     name_value = str(name_value).strip()
     column = getattr(model, name_field)
     obj = session.query(model).filter(column == name_value).first()
+    
     if obj:
+        # If it exists but matched_id is missing, try to fill it
+        if matched_id_field and hasattr(obj, matched_id_field) and getattr(obj, matched_id_field) is None and reference_model:
+            matched_id = _fuzzy_match_name(session, reference_model, name_value, cache=cache)
+            if matched_id:
+                setattr(obj, matched_id_field, matched_id)
+                session.flush()
         return obj
 
-    obj = model(**{name_field: name_value})
+    # Create new
+    params = {name_field: name_value}
+    if matched_id_field and reference_model:
+        matched_id = _fuzzy_match_name(session, reference_model, name_value, cache=cache)
+        if matched_id:
+            params[matched_id_field] = matched_id
+
+    obj = model(**params)
     session.add(obj)
     session.flush()
     return obj
@@ -970,6 +1870,8 @@ def update_profile_endpoint():
         db.query(TrueEducation).filter(TrueEducation.user_id == user.id).delete()
         db.query(TrueSkill).filter(TrueSkill.user_id == user.id).delete()
 
+        fuzzy_cache = {}
+
         # Work experiences
         for item in data.get("work_experiences") or []:
             company = (item.get("company") or "").strip()
@@ -977,7 +1879,7 @@ def update_profile_endpoint():
             start_str = item.get("start_date")
             end_str = item.get("end_date")
 
-            org = _get_or_create_true_lookup(db, TrueOrganization, "name", company)
+            org = _get_or_create_true_lookup(db, TrueOrganization, "name", company, reference_model=Organization, matched_id_field="matched_org_id", cache=fuzzy_cache)
             role = _get_or_create_true_lookup(db, TrueRole, "name", role_name)
 
             start_date_val = parse_date(start_str)
@@ -999,7 +1901,7 @@ def update_profile_endpoint():
             start_str = item.get("start_date")
             end_str = item.get("end_date")
 
-            school = _get_or_create_true_lookup(db, TrueSchool, "name", college)
+            school = _get_or_create_true_lookup(db, TrueSchool, "name", college, reference_model=School, matched_id_field="matched_school_id", cache=fuzzy_cache)
             start_date_val = parse_date(start_str)
             end_date_val = parse_date(end_str)
 
@@ -1086,6 +1988,8 @@ def upload_resume_endpoint():
         db.query(TrueEducation).filter(TrueEducation.user_id == user.id).delete()
         # We intentionally do NOT touch skills here; those are user-entered.
 
+        fuzzy_cache = {}
+
         # Map experiences from parsed resume.
         for exp in parsed.get("experiences") or []:
             # exp format: [org, title, tenure, address]
@@ -1094,7 +1998,7 @@ def upload_resume_endpoint():
             tenure_raw = exp[2] if len(exp) > 2 else None
             address_raw = exp[3] if len(exp) > 3 else None
 
-            org = _get_or_create_true_lookup(db, TrueOrganization, "name", org_raw)
+            org = _get_or_create_true_lookup(db, TrueOrganization, "name", org_raw, reference_model=Organization, matched_id_field="matched_org_id", cache=fuzzy_cache)
             role = _get_or_create_true_lookup(db, TrueRole, "name", role_raw)
             start_dt, end_dt, duration = parse_tenure(tenure_raw)
 
@@ -1115,7 +2019,7 @@ def upload_resume_endpoint():
             school_raw = edu[0] if len(edu) > 0 else None
             degree_raw = edu[1] if len(edu) > 1 else None
 
-            school = _get_or_create_true_lookup(db, TrueSchool, "name", school_raw)
+            school = _get_or_create_true_lookup(db, TrueSchool, "name", school_raw, reference_model=School, matched_id_field="matched_school_id", cache=fuzzy_cache)
             degree, start_dt, end_dt = parse_degree(degree_raw)
 
             edu_row = TrueEducation(

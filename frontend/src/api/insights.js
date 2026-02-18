@@ -7,7 +7,7 @@
 const API_BASE =
   process.env.REACT_APP_INSIGHTS_API_URL !== undefined && process.env.REACT_APP_INSIGHTS_API_URL !== ''
     ? process.env.REACT_APP_INSIGHTS_API_URL.replace(/\/$/, '')
-    : 'http://localhost:5001';
+    : ''; // In dev, use proxy (empty base) so requests go to same origin and get proxied to Flask.
 
 function getAuthHeaders() {
   const token = localStorage.getItem('insights_token');
@@ -47,7 +47,24 @@ export async function searchOrganizations(orgName) {
   return res.json();
 }
 
-export async function getOrgTransitions(orgId, { startDate, endDate, hops = 3, role } = {}) {
+/**
+ * Build connection_filters query param (JSON) for org-transitions and alumni.
+ * All arrays: empty = no filter (All / Any). Multiple = OR within category, AND across.
+ */
+export function buildConnectionFiltersParam(filters) {
+  if (!filters) return null;
+  const payload = {
+    past_companies: filters.past_companies || [],
+    past_roles: filters.past_roles || [],
+    tenure_options: filters.tenure_options || [],
+    colleges: filters.colleges || [],
+    departments: filters.departments || [],
+    batch_options: filters.batch_options || [],
+  };
+  return JSON.stringify(payload);
+}
+
+export async function getOrgTransitions(orgId, { startDate, endDate, hops = 3, role, connectionFilters, includeRelated } = {}) {
   const id = orgId != null ? Number(orgId) : null;
   if (id == null || Number.isNaN(id)) {
     throw new Error('org_id is required');
@@ -55,9 +72,10 @@ export async function getOrgTransitions(orgId, { startDate, endDate, hops = 3, r
   const params = new URLSearchParams({ org_id: String(id), hops: String(hops) });
   if (startDate) params.set('start_date', startDate);
   if (endDate) params.set('end_date', endDate);
-  // Optional free-text role filter to highlight companies that hired
-  // from this org into similar roles (handled in /org-transitions).
   if (role) params.set('role', role);
+  if (includeRelated) params.set('include_related', '1');
+  const cf = buildConnectionFiltersParam(connectionFilters);
+  if (cf) params.set('connection_filters', cf);
   const url = API_BASE
     ? `${API_BASE}/org-transitions?${params.toString()}`
     : `/org-transitions?${params.toString()}`;
@@ -115,8 +133,9 @@ export async function getEmployeeTransitions(
 
 /**
  * Fetch all alumni for a given organization (people who worked there and left).
+ * Optional connectionFilters filters by profile-based connections.
  */
-export async function getAlumni(orgId, { startDate, endDate } = {}) {
+export async function getAlumni(orgId, { startDate, endDate, connectionFilters } = {}) {
   const id = orgId != null ? Number(orgId) : null;
   if (id == null || Number.isNaN(id)) {
     throw new Error('org_id is required');
@@ -124,6 +143,8 @@ export async function getAlumni(orgId, { startDate, endDate } = {}) {
   const params = new URLSearchParams({ org_id: String(id) });
   if (startDate) params.set('start_date', startDate);
   if (endDate) params.set('end_date', endDate);
+  const cf = buildConnectionFiltersParam(connectionFilters);
+  if (cf) params.set('connection_filters', cf);
 
   const url = API_BASE
     ? `${API_BASE}/alumni?${params.toString()}`
@@ -133,6 +154,52 @@ export async function getAlumni(orgId, { startDate, endDate } = {}) {
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `Failed to fetch alumni: ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * Fetch dashboard data in one call: filter_options, transitions, alumni (no connection filters).
+ */
+export async function getDashboardData(orgId, { startDate, endDate, hops = 3, role } = {}) {
+  const id = orgId != null ? Number(orgId) : null;
+  if (id == null || Number.isNaN(id)) {
+    throw new Error('org_id is required');
+  }
+  const params = new URLSearchParams({ org_id: String(id), hops: String(hops) });
+  if (startDate) params.set('start_date', startDate);
+  if (endDate) params.set('end_date', endDate);
+  if (role) params.set('role', role);
+  const url = API_BASE
+    ? `${API_BASE}/dashboard-data?${params.toString()}`
+    : `/dashboard-data?${params.toString()}`;
+  const res = await fetch(url, { headers: getAuthHeaders() });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Dashboard data failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * Fetch related-background people at a destination company (not from transition).
+ */
+export async function getRelatedBackground(sourceOrgId, destOrgId, { startDate, endDate } = {}) {
+  const source = sourceOrgId != null ? Number(sourceOrgId) : null;
+  const dest = destOrgId != null ? Number(destOrgId) : null;
+  if (source == null || Number.isNaN(source) || dest == null || Number.isNaN(dest)) {
+    throw new Error('source_org_id and dest_org_id are required');
+  }
+  const params = new URLSearchParams({ source_org_id: String(source), dest_org_id: String(dest) });
+  if (startDate) params.set('start_date', startDate);
+  if (endDate) params.set('end_date', endDate);
+  const url = API_BASE
+    ? `${API_BASE}/related-background?${params.toString()}`
+    : `/related-background?${params.toString()}`;
+  const res = await fetch(url, { headers: getAuthHeaders() });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Related background failed: ${res.status}`);
   }
   return res.json();
 }
