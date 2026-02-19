@@ -2,7 +2,6 @@ from datetime import date, datetime, timedelta, timezone
 import random
 import os
 import smtplib
-import threading
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from functools import wraps
@@ -105,8 +104,12 @@ def token_required(f):
 
 
 def send_otp_email(receiver_email, otp_code):
-    sender_email = os.environ.get("SMTP_EMAIL", "insightslookup@gmail.com")
-    sender_password = os.environ.get("SMTP_PASSWORD", "chxh lmbs fuhb ertp")
+    sender_email = os.environ.get("SMTP_EMAIL")
+    sender_password = os.environ.get("SMTP_PASSWORD")
+    smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.environ.get("SMTP_PORT", "465"))
+    smtp_use_ssl = os.environ.get("SMTP_USE_SSL", "true").lower() == "true"
+    smtp_use_tls = os.environ.get("SMTP_USE_TLS", "false").lower() == "true"
 
     if not sender_email or not sender_password:
         print("SMTP_EMAIL or SMTP_PASSWORD not set. Cannot send email.")
@@ -136,8 +139,14 @@ def send_otp_email(receiver_email, otp_code):
     message.attach(MIMEText(html, "html"))
 
     try:
-        # Use a 10-second timeout to avoid blocking the thread indefinitely
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
+        if smtp_use_ssl:
+            server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=10)
+        else:
+            server = smtplib.SMTP(smtp_host, smtp_port, timeout=10)
+            if smtp_use_tls:
+                server.starttls()
+
+        with server:
             server.login(sender_email, sender_password)
             server.sendmail(sender_email, receiver_email, message.as_string())
         print(f"Email sent successfully to {receiver_email}")
@@ -199,17 +208,11 @@ def request_otp():
             )
             db.add(new_otp)
         
-        db.commit()
-        print(f"DEBUG: OTP for {email} is {code}")
+        if not send_otp_email(email, code):
+            db.rollback()
+            return jsonify({"error": "Failed to send OTP email. Please try again."}), 502
 
-        # Send email in a background thread so the HTTP response is returned immediately
-        # without blocking on the SMTP connection (which was causing the request to hang)
-        email_thread = threading.Thread(
-            target=send_otp_email,
-            args=(email, code),
-            daemon=True
-        )
-        email_thread.start()
+        db.commit()
 
         return jsonify({"message": "OTP sent successfully"}), 200
 
