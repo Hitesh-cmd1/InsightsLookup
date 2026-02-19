@@ -5,24 +5,31 @@
 
 import mixpanel from 'mixpanel-browser';
 
-const MIXPANEL_TOKEN =
-  process.env.REACT_APP_MIXPANEL_TOKEN || '29b61feb2990595f565b2ff83078b5f3';
+const MIXPANEL_TOKEN = (process.env.REACT_APP_MIXPANEL_TOKEN || '').trim();
+const MIXPANEL_API_HOST = (process.env.REACT_APP_MIXPANEL_API_HOST || 'https://api-js.mixpanel.com').trim();
 
 const SESSION_START_KEY = 'insights_analytics_session_start';
 const APP_OPENED_KEY = 'insights_analytics_app_opened';
 const LAST_PAGE_KEY = 'insights_analytics_last_page';
 
 let isInitialized = false;
+let isDisabled = false;
 
 /**
  * Initialize Mixpanel at app root.
  * Enable autocapture and session recording.
  */
 export function initMixpanel() {
-  if (isInitialized) return;
+  if (isInitialized || isDisabled) return;
+  if (!MIXPANEL_TOKEN) {
+    isDisabled = true;
+    console.warn('Mixpanel disabled: missing REACT_APP_MIXPANEL_TOKEN');
+    return;
+  }
   mixpanel.init(MIXPANEL_TOKEN, {
     autocapture: true,
     record_sessions_percent: 100,
+    api_host: MIXPANEL_API_HOST,
   });
   isInitialized = true;
   if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
@@ -32,6 +39,7 @@ export function initMixpanel() {
 
 function getMixpanel() {
   if (!isInitialized) initMixpanel();
+  if (!isInitialized) return null;
   return mixpanel;
 }
 
@@ -53,6 +61,7 @@ function getDeviceType() {
 export function identifyUser(user, options = {}) {
   if (!user) return;
   const mp = getMixpanel();
+  if (!mp) return;
   mp.identify(String(user.id));
   mp.people.set({
     email: user.email,
@@ -73,8 +82,10 @@ export function trackSessionStarted() {
   const start = Date.now();
   try {
     sessionStorage.setItem(SESSION_START_KEY, String(start));
-  } catch (_) {}
-  getMixpanel().track('Session Started', {
+  } catch (_) { }
+  const mp = getMixpanel();
+  if (!mp) return;
+  mp.track('Session Started', {
     timestamp: new Date().toISOString(),
     device_type: getDeviceType(),
     referrer: typeof document !== 'undefined' ? document.referrer || '' : '',
@@ -87,13 +98,14 @@ export function trackSessionStarted() {
  */
 export function trackSessionEnded() {
   const mp = getMixpanel();
+  if (!mp) return;
   let sessionDurationSeconds = null;
   try {
     const start = sessionStorage.getItem(SESSION_START_KEY);
     if (start) {
       sessionDurationSeconds = Math.round((Date.now() - Number(start)) / 1000);
     }
-  } catch (_) {}
+  } catch (_) { }
   const lastPage = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(LAST_PAGE_KEY) : null;
   const activationCounts = getActivationCountsForSession();
   mp.track('Session Ended', {
@@ -114,6 +126,7 @@ export function trackSessionEnded() {
  */
 export function trackPageViewed(pageName, urlPath) {
   const mp = getMixpanel();
+  if (!mp) return;
   mp.time_event('Page Viewed');
   mp.track('Page Viewed', {
     page_name: pageName,
@@ -122,7 +135,7 @@ export function trackPageViewed(pageName, urlPath) {
   });
   try {
     sessionStorage.setItem(LAST_PAGE_KEY, pageName || urlPath || '');
-  } catch (_) {}
+  } catch (_) { }
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +153,9 @@ export function trackAppOpened() {
   } catch (_) {
     return;
   }
-  getMixpanel().track('App Opened', {
+  const mp = getMixpanel();
+  if (!mp) return;
+  mp.track('App Opened', {
     timestamp: new Date().toISOString(),
   });
 }
@@ -150,7 +165,9 @@ export function trackAppOpened() {
  * EVENT: Signup Completed
  */
 export function trackSignupCompleted(signupMethod = 'email') {
-  getMixpanel().track('Signup Completed', {
+  const mp = getMixpanel();
+  if (!mp) return;
+  mp.track('Signup Completed', {
     signup_method: signupMethod,
     timestamp: new Date().toISOString(),
   });
@@ -161,7 +178,9 @@ export function trackSignupCompleted(signupMethod = 'email') {
  * EVENT: Login
  */
 export function trackLogin() {
-  getMixpanel().track('Login', {
+  const mp = getMixpanel();
+  if (!mp) return;
+  mp.track('Login', {
     timestamp: new Date().toISOString(),
   });
 }
@@ -175,7 +194,9 @@ export function trackLogin() {
  * EVENT: Core Feature Used
  */
 export function trackCoreFeatureUsed(featureName, context = {}) {
-  getMixpanel().track('Core Feature Used', {
+  const mp = getMixpanel();
+  if (!mp) return;
+  mp.track('Core Feature Used', {
     feature_name: featureName,
     context: typeof context === 'object' ? context : { value: context },
     timestamp: new Date().toISOString(),
@@ -187,7 +208,9 @@ export function trackCoreFeatureUsed(featureName, context = {}) {
  * EVENT: Activated
  */
 export function trackActivated(properties) {
-  getMixpanel().track('Activated', {
+  const mp = getMixpanel();
+  if (!mp) return;
+  mp.track('Activated', {
     ...properties,
     timestamp: new Date().toISOString(),
   });
@@ -211,7 +234,7 @@ function getActivationCounts() {
 function setActivationCounts(counts) {
   try {
     sessionStorage.setItem(ACTIVATION_STORAGE_KEY, JSON.stringify(counts));
-  } catch (_) {}
+  } catch (_) { }
 }
 
 const DEFAULT_COUNTS = {

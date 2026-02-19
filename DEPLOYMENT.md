@@ -34,6 +34,8 @@
    | Name | Value |
    |------|-------|
    | `REACT_APP_INSIGHTS_API_URL` | `https://insightslookup.onrender.com` |
+   | `REACT_APP_MIXPANEL_TOKEN` | `your_mixpanel_project_token` |
+   | `REACT_APP_MIXPANEL_API_HOST` | `https://api-js.mixpanel.com` (or `https://api-eu.mixpanel.com` for EU projects) |
 
 5. **Deploy**
    - Click "Deploy"
