@@ -591,7 +591,7 @@ const Dashboard = () => {
         if (requestSeq !== transitionsRequestSeqRef.current) return;
         setLoading(false);
       });
-  }, [searchParams.orgId, searchParams.startYear, searchParams.endYear, contextRole, appliedConnectionFilters, profile, profileLoaded, user, openLogin, authLoading]);
+  }, [searchParams.orgId, searchParams.startYear, searchParams.endYear, contextRole, appliedConnectionFilters, profile, profileLoaded, user, openLogin, authLoading, location.state, navigate]);
 
   // Fetch alumni when the tab is active
   useEffect(() => {

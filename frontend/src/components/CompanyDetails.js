@@ -40,7 +40,7 @@ const CompanyDetails = () => {
   useEffect(() => {
     if (employees.length === 0 && (relatedBackground || []).length > 0) setPeopleTab('related');
     else if (employees.length > 0) setPeopleTab('transition');
-  }, [employees.length, relatedBackground?.length]);
+  }, [employees.length, relatedBackground]);
 
   useEffect(() => {
     if (authLoading) return;

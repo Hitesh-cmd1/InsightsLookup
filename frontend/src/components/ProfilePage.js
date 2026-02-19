@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Upload, X, Plus, Info, TrendingUp, User as UserIcon, LogOut, FileText, Download } from 'lucide-react';
 import { toast } from 'sonner';
@@ -39,7 +39,7 @@ const ProfilePage = () => {
 
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
 
-  const hydrateFromProfile = (profile) => {
+  const hydrateFromProfile = useCallback((profile) => {
     if (!profile) return;
     setName(profile.name || '');
     setEmail(profile.email || user?.email || '');
@@ -68,7 +68,7 @@ const ProfilePage = () => {
 
     setSkills(Array.isArray(profile.skills) ? profile.skills : []);
     setResumeFileName(profile.profile_id || null);
-  };
+  }, [user?.email]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -90,7 +90,7 @@ const ProfilePage = () => {
         setName(user.name || user.email?.split('@')[0] || '');
       })
       .finally(() => setLoading(false));
-  }, [authLoading, user, openLogin, navigate]);
+  }, [authLoading, user, openLogin, navigate, hydrateFromProfile]);
 
   const handleAddSkill = () => {
     const value = (skillInput || '').trim();
@@ -689,4 +689,3 @@ const ProfilePage = () => {
 };
 
 export default ProfilePage;
-
