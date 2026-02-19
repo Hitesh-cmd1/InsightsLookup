@@ -94,7 +94,7 @@ export async function getOrgTransitions(orgId, { startDate, endDate, hops = 3, r
 export async function getEmployeeTransitions(
   sourceOrgId,
   destOrgId,
-  { hop, startDate, endDate, role } = {}
+  { hop, startDate, endDate, role, connectionFilters } = {}
 ) {
   const source = sourceOrgId != null ? Number(sourceOrgId) : null;
   const dest = destOrgId != null ? Number(destOrgId) : null;
@@ -118,6 +118,8 @@ export async function getEmployeeTransitions(
   if (startDate) params.set('start_date', startDate);
   if (endDate) params.set('end_date', endDate);
   if (role) params.set('role', role);
+  const cf = buildConnectionFiltersParam(connectionFilters);
+  if (cf) params.set('connection_filters', cf);
 
   const url = API_BASE
     ? `${API_BASE}/employee-transitions?${params.toString()}`

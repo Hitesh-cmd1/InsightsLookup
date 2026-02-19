@@ -362,17 +362,36 @@ def _get_user_profile_filter_data(db, user_id):
     }
 
 
-def _alumni_pass_connection_filters(db, user_id, employee_ids, exps_by_emp, edus_by_emp, filters):
+def _alumni_pass_connection_filters(
+    db,
+    user_id,
+    employee_ids,
+    exps_by_emp,
+    edus_by_emp,
+    filters,
+    org_names=None,
+    role_names=None,
+    school_names=None,
+    return_details=False,
+):
     """
-    Return set of employee_ids that pass the connection filters.
+    Return a map of employee_id -> bool (is_match) for connection filters.
     filters: dict with past_companies, past_roles, tenure_options, colleges, departments, batch_options (lists).
     Logic: (past_company OR) AND (past_role OR) AND (tenure OR) AND (college OR) AND (dept OR) AND (batch OR).
     """
-    if not filters or not employee_ids:
-        return set(employee_ids)
+    if not employee_ids:
+        return ({}, {}) if return_details else {}
+    if not filters:
+        all_true = {emp_id: True for emp_id in employee_ids}
+        if return_details:
+            return all_true, {emp_id: {"work_matches": [], "education_matches": []} for emp_id in employee_ids}
+        return all_true
     profile = _get_user_profile_filter_data(db, user_id)
     if not profile:
-        return set(employee_ids)
+        all_true = {emp_id: True for emp_id in employee_ids}
+        if return_details:
+            return all_true, {emp_id: {"work_matches": [], "education_matches": []} for emp_id in employee_ids}
+        return all_true
 
     past_companies = [str(x).strip() for x in (filters.get("past_companies") or []) if x]
     past_roles = [str(x).strip() for x in (filters.get("past_roles") or []) if x]
@@ -383,6 +402,65 @@ def _alumni_pass_connection_filters(db, user_id, employee_ids, exps_by_emp, edus
 
     user_stints_by_company = {s["company"]: (s["start"], s["end"]) for s in profile["company_stints"]}
     user_edu_ranges = profile["education_stints"]
+    user_stints_by_company_id = {}
+    user_edu_ranges_by_school_id = {}
+    selected_company_org_ids = set()
+    selected_school_ids = set()
+
+    # Resolve selected profile names to matched IDs so filters still work when scraped names differ.
+    user = db.query(User).filter(User.id == user_id).first() if user_id else None
+    if user:
+        _ = user.true_experiences, user.true_educations
+        selected_company_names = set(past_companies)
+        selected_college_names = set(colleges)
+        for te in user.true_experiences:
+            if not te.organization:
+                continue
+            mid = te.organization.matched_org_id
+            if mid:
+                user_stints_by_company_id[mid] = (te.start_date, te.end_date)
+            if selected_company_names and te.organization.name in selected_company_names and mid:
+                selected_company_org_ids.add(mid)
+        for ed in user.true_educations:
+            if not ed.school:
+                continue
+            sid = ed.school.matched_school_id
+            if sid:
+                user_edu_ranges_by_school_id.setdefault(sid, []).append({
+                    "start_year": ed.start_date.year if ed.start_date else None,
+                    "end_year": ed.end_date.year if ed.end_date else None,
+                })
+            if selected_college_names and ed.school.name in selected_college_names and sid:
+                selected_school_ids.add(sid)
+
+    if past_companies:
+        for row in db.query(Organization.id).filter(Organization.name.in_(past_companies)).all():
+            selected_company_org_ids.add(row[0])
+    if colleges:
+        for row in db.query(School.id).filter(School.name.in_(colleges)).all():
+            selected_school_ids.add(row[0])
+
+    def _norm(text):
+        return " ".join(str(text or "").strip().lower().split())
+
+    def _token_set(text):
+        return {t for t in _norm(text).replace("/", " ").replace("-", " ").split(" ") if t}
+
+    def _is_similar(a, b, threshold=60):
+        a_n = _norm(a)
+        b_n = _norm(b)
+        if not a_n or not b_n:
+            return False
+        if a_n == b_n:
+            return True
+        ratio = fuzz.ratio(a_n, b_n)
+        partial = fuzz.partial_ratio(a_n, b_n)
+        a_tokens = _token_set(a_n)
+        b_tokens = _token_set(b_n)
+        overlap = 0
+        if a_tokens or b_tokens:
+            overlap = (len(a_tokens & b_tokens) / max(1, len(a_tokens | b_tokens))) * 100
+        return max(ratio, partial, overlap) >= threshold
 
     def tenure_matches(alumni_start, alumni_end, user_start, user_end, option):
         if option == "any-time":
@@ -401,7 +479,7 @@ def _alumni_pass_connection_filters(db, user_id, employee_ids, exps_by_emp, edus
             return low <= alumni_end <= high
         return False
 
-    def batch_matches(alumni_start_year, alumni_end_year, alumni_school_name):
+    def batch_matches(alumni_start_year, alumni_end_year, alumni_school_name, alumni_school_id):
         if not batch_opts or "any" in batch_opts:
             return True
         for u in user_edu_ranges:
@@ -414,13 +492,23 @@ def _alumni_pass_connection_filters(db, user_id, employee_ids, exps_by_emp, edus
             if "close" in batch_opts and u_start is not None and alumni_start_year is not None:
                 if abs(alumni_start_year - u_start) <= 4:
                     return True
+        for u in user_edu_ranges_by_school_id.get(alumni_school_id, []):
+            u_start = u["start_year"]
+            u_end = u["end_year"]
+            if "exact" in batch_opts and alumni_start_year == u_start and alumni_end_year == u_end:
+                return True
+            if "close" in batch_opts and u_start is not None and alumni_start_year is not None:
+                if abs(alumni_start_year - u_start) <= 4:
+                    return True
         if "any" in batch_opts:
             return True
         return False
 
-    org_names = {}
-    role_names = {}
-    if exps_by_emp:
+    if org_names is None:
+        org_names = {}
+    if role_names is None:
+        role_names = {}
+    if exps_by_emp and (not org_names or not role_names):
         all_org_ids = set()
         all_role_ids = set()
         for exps in exps_by_emp.values():
@@ -436,8 +524,9 @@ def _alumni_pass_connection_filters(db, user_id, employee_ids, exps_by_emp, edus
             for r in db.query(Role).filter(Role.id.in_(all_role_ids)).all():
                 role_names[r.id] = r.name
 
-    school_names = {}
-    if edus_by_emp:
+    if school_names is None:
+        school_names = {}
+    if edus_by_emp and not school_names:
         all_school_ids = set()
         for edus in edus_by_emp.values():
             for e in edus:
@@ -450,10 +539,13 @@ def _alumni_pass_connection_filters(db, user_id, employee_ids, exps_by_emp, edus
     has_work_filters = bool(past_companies or past_roles or (tenure_opts and "any-time" not in tenure_opts))
     has_edu_filters = bool(colleges or departments or (batch_opts and "any" not in batch_opts))
 
-    passing = set()
+    match_map = {}
+    match_details = {}
     for emp_id in employee_ids:
         emp_exps = exps_by_emp.get(emp_id, [])
         emp_edus = edus_by_emp.get(emp_id, [])
+        work_matches = []
+        edu_matches = []
 
         # --- Check Work Section ---
         work_match = False
@@ -463,19 +555,42 @@ def _alumni_pass_connection_filters(db, user_id, employee_ids, exps_by_emp, edus
                 role_name = role_names.get(exp.role_id, "")
                 
                 # Check company (if any selected)
-                comp_ok = not past_companies or (org_name in past_companies)
+                comp_ok = (
+                    not past_companies
+                    or (org_name in past_companies)
+                    or (exp.organization_id in selected_company_org_ids)
+                )
                 # Check role (if any selected)
-                role_ok = not past_roles or (role_name in past_roles)
+                role_ok = (
+                    not past_roles
+                    or any(_is_similar(role_name, selected_role, threshold=60) for selected_role in past_roles)
+                )
                 # Check tenure (if any selected)
                 tenure_ok = not tenure_opts or "any-time" in tenure_opts
                 if tenure_opts and "any-time" not in tenure_opts:
                     user_start, user_end = user_stints_by_company.get(org_name, (None, None))
+                    if (not user_start and not user_end) and exp.organization_id:
+                        user_start, user_end = user_stints_by_company_id.get(exp.organization_id, (None, None))
                     for opt in tenure_opts:
                         if tenure_matches(exp.start_date, exp.end_date, user_start, user_end, opt):
                             tenure_ok = True
                             break
                 
                 if comp_ok and role_ok and tenure_ok:
+                    matched_fields = []
+                    if past_companies and comp_ok:
+                        matched_fields.append("company")
+                    if past_roles and role_ok:
+                        matched_fields.append("role")
+                    if tenure_opts and tenure_ok:
+                        matched_fields.append("tenure")
+                    work_matches.append({
+                        "organization": org_name or "Unknown",
+                        "role": role_name or None,
+                        "start_date": exp.start_date.isoformat() if exp.start_date else None,
+                        "end_date": exp.end_date.isoformat() if exp.end_date else None,
+                        "matched_fields": matched_fields,
+                    })
                     # In work section, we match if ANY experience matches the selected filters
                     work_match = True
                     break
@@ -489,28 +604,49 @@ def _alumni_pass_connection_filters(db, user_id, employee_ids, exps_by_emp, edus
                 start_y = edu.start_date.year if edu.start_date else None
                 end_y = edu.end_date.year if edu.end_date else None
                 
-                school_ok = not colleges or (school_name in colleges)
-                dept_ok = not departments or (deg in departments)
-                batch_ok = not batch_opts or "any" in batch_opts or batch_matches(start_y, end_y, school_name)
+                school_ok = (
+                    not colleges
+                    or (school_name in colleges)
+                    or (edu.school_id in selected_school_ids)
+                )
+                dept_ok = (
+                    not departments
+                    or any(_is_similar(deg, selected_dept, threshold=60) for selected_dept in departments)
+                )
+                batch_ok = not batch_opts or "any" in batch_opts or batch_matches(start_y, end_y, school_name, edu.school_id)
                 
                 if school_ok and dept_ok and batch_ok:
+                    matched_fields = []
+                    if colleges and school_ok:
+                        matched_fields.append("college")
+                    if departments and dept_ok:
+                        matched_fields.append("department")
+                    if batch_opts and batch_ok:
+                        matched_fields.append("batch")
+                    edu_matches.append({
+                        "school": school_name or "Unknown",
+                        "degree": deg or None,
+                        "start_year": start_y,
+                        "end_year": end_y,
+                        "matched_fields": matched_fields,
+                    })
                     edu_match = True
                     break
 
         # --- OR Logic Between Sections ---
         if has_work_filters and has_edu_filters:
-            if work_match or edu_match:
-                passing.add(emp_id)
+            match_map[emp_id] = bool(work_match or edu_match)
         elif has_work_filters:
-            if work_match:
-                passing.add(emp_id)
+            match_map[emp_id] = bool(work_match)
         elif has_edu_filters:
-            if edu_match:
-                passing.add(emp_id)
+            match_map[emp_id] = bool(edu_match)
         else:
             # No filters selected, everyone passes
-            passing.add(emp_id)
-    return passing if (past_companies or past_roles or tenure_opts or colleges or departments or batch_opts) else set(employee_ids)
+            match_map[emp_id] = True
+        match_details[emp_id] = {"work_matches": work_matches, "education_matches": edu_matches}
+    if return_details:
+        return match_map, match_details
+    return match_map
 
 
 @app.get("/dashboard-data")
@@ -658,7 +794,11 @@ def dashboard_data():
         related_by_dest_raw = _compute_related_counts_for_dests(db, all_dest_org_ids, user_id, transition_emp_ids_by_org)
         # Serialize: keys must be strings for JSON, values keep count + related list
         related_by_dest = {
-            str(org_id): {"count": v["count"], "related": v["related"]}
+            str(org_id): {
+                "count": v["count"],
+                "match_count": v.get("match_count", v["count"]),
+                "related": v["related"],
+            }
             for org_id, v in related_by_dest_raw.items()
         }
 
@@ -827,24 +967,6 @@ def org_transitions():
         for exp in all_exps:
             exps_by_emp.setdefault(exp.employee_id, []).append(exp)
 
-        # Connection filters: load educations and filter alumni
-        passing_employee_ids = set(employee_ids)
-        if connection_filters and user_id:
-            all_edus = (
-                db.query(Education)
-                .filter(Education.employee_id.in_(employee_ids))
-                .all()
-            )
-            edus_by_emp = {}
-            for edu in all_edus:
-                edus_by_emp.setdefault(edu.employee_id, []).append(edu)
-            for eid in employee_ids:
-                if eid not in edus_by_emp:
-                    edus_by_emp[eid] = []
-            passing_employee_ids = _alumni_pass_connection_filters(
-                db, user_id, employee_ids, exps_by_emp, edus_by_emp, connection_filters
-            )
-
         # Track transitions: {hop_number: {org_id: {"count": N, "years": [2020, 2021, ...]}}}
         hop_counts = {}
         # Track which destination orgs have at least one hire into a role
@@ -853,8 +975,6 @@ def org_transitions():
         transition_emp_ids_by_org = {}  # {org_id: set(emp_ids)}
 
         for exit_stint in exit_stints:
-            if exit_stint.employee_id not in passing_employee_ids:
-                continue
             emp_id = exit_stint.employee_id
             exit_end = exit_stint.end_date
 
@@ -957,9 +1077,19 @@ def org_transitions():
             all_dest_org_ids_set = set()
             for hop_map in hop_counts.values():
                 all_dest_org_ids_set.update(hop_map.keys())
-            related_by_dest_raw = _compute_related_counts_for_dests(db, all_dest_org_ids_set, user_id, transition_emp_ids_by_org)
+            related_by_dest_raw = _compute_related_counts_for_dests(
+                db,
+                all_dest_org_ids_set,
+                user_id,
+                transition_emp_ids_by_org,
+                connection_filters=connection_filters,
+            )
             related_by_dest = {
-                str(org_id): {"count": v["count"], "related": v["related"]}
+                str(org_id): {
+                    "count": v["count"],
+                    "match_count": v.get("match_count", v["count"]),
+                    "related": v["related"],
+                }
                 for org_id, v in related_by_dest_raw.items()
             }
             result["related_by_dest"] = related_by_dest
@@ -1002,6 +1132,8 @@ def employee_transitions():
     start_date_str = request.args.get("start_date")
     end_date_str = request.args.get("end_date")
     role_filter = request.args.get("role", type=str)
+    connection_filters = _parse_connection_filters()
+    user_id = request.current_user.get("id") if getattr(request, "current_user", None) else None
 
     if not source_org_id:
         return jsonify({"error": "Missing required query parameter 'source_org_id' (int)"}), 400
@@ -1178,8 +1310,62 @@ def employee_transitions():
             for emp in matching_employees:
                 emp["role_match"] = False
 
+        # Apply connection filters to transition people as match flags/details only (no removals).
+        if matching_employees:
+            transition_emp_ids = [emp["employee_id"] for emp in matching_employees]
+            transition_exps_by_emp = {
+                eid: exps_by_emp.get(eid, [])
+                for eid in transition_emp_ids
+            }
+            all_edus = (
+                db.query(Education)
+                .filter(Education.employee_id.in_(transition_emp_ids))
+                .all()
+            )
+            edus_by_emp = {}
+            for edu in all_edus:
+                edus_by_emp.setdefault(edu.employee_id, []).append(edu)
+            for eid in transition_emp_ids:
+                edus_by_emp.setdefault(eid, [])
+
+            school_names = {}
+            school_ids = {edu.school_id for edu in all_edus if edu.school_id}
+            if school_ids:
+                for s in db.query(School).filter(School.id.in_(school_ids)).all():
+                    school_names[s.id] = s.name
+
+            if connection_filters and user_id:
+                transition_match_map, transition_match_details = _alumni_pass_connection_filters(
+                    db,
+                    user_id,
+                    transition_emp_ids,
+                    transition_exps_by_emp,
+                    edus_by_emp,
+                    connection_filters,
+                    org_names=org_name_by_id if matching_employees else None,
+                    role_names=role_name_by_id if matching_employees else None,
+                    school_names=school_names,
+                    return_details=True,
+                )
+            else:
+                transition_match_map = {eid: False for eid in transition_emp_ids}
+                transition_match_details = {eid: {"work_matches": [], "education_matches": []} for eid in transition_emp_ids}
+
+            for emp in matching_employees:
+                eid = emp["employee_id"]
+                emp["is_match"] = bool(transition_match_map.get(eid, False))
+                emp["filter_match_details"] = transition_match_details.get(
+                    eid, {"work_matches": [], "education_matches": []}
+                )
+
         # Sort by employee name
-        matching_employees.sort(key=lambda x: x["employee_name"])
+        matching_employees.sort(
+            key=lambda x: (
+                not x.get("is_match", False),
+                not x.get("role_match", False),
+                x["employee_name"],
+            )
+        )
 
         return jsonify(matching_employees)
 
@@ -1245,8 +1431,8 @@ def get_alumni():
         for exp in all_exps:
             exps_by_emp.setdefault(exp.employee_id, []).append(exp)
 
-        # Connection filters: load educations and filter alumni
-        passing_employee_ids = set(employee_ids)
+        # Connection filters: load educations and mark alumni matches (do not filter out)
+        alumni_match_map = {eid: True for eid in employee_ids}
         if connection_filters and user_id:
             all_edus = (
                 db.query(Education)
@@ -1259,14 +1445,12 @@ def get_alumni():
             for eid in employee_ids:
                 if eid not in edus_by_emp:
                     edus_by_emp[eid] = []
-            passing_employee_ids = _alumni_pass_connection_filters(
+            alumni_match_map = _alumni_pass_connection_filters(
                 db, user_id, employee_ids, exps_by_emp, edus_by_emp, connection_filters
             )
 
         alumni_list = []
         for emp_id in employee_ids:
-            if emp_id not in passing_employee_ids:
-                continue
             emp_exps = exps_by_emp.get(emp_id, [])
             # Find the exit from our target org
             target_exit = next((e for e in exit_stints if e.employee_id == emp_id), None)
@@ -1298,10 +1482,11 @@ def get_alumni():
                 "name": emp_name_by_id.get(emp_id, "Unknown"),
                 "exited_year": target_exit.end_date.year,
                 "path": path,
-                "current_company": path[-1] if path else org_name_by_id.get(org_id)
+                "current_company": path[-1] if path else org_name_by_id.get(org_id),
+                "is_match": bool(alumni_match_map.get(emp_id, False)),
             })
 
-        alumni_list.sort(key=lambda x: x["name"])
+        alumni_list.sort(key=lambda x: (not x.get("is_match", False), x["name"]))
         return jsonify(alumni_list)
 
 
@@ -1351,7 +1536,7 @@ def _get_user_matched_ids(db, user_id):
     return org_ids, school_ids
 
 
-def _compute_related_counts_for_dests(db, dest_org_ids, user_id, exclude_emp_ids_by_org=None):
+def _compute_related_counts_for_dests(db, dest_org_ids, user_id, exclude_emp_ids_by_org=None, connection_filters=None):
     """
     For a set of destination org IDs, find current employees (end_date IS NULL) who share
     the user's background (worked at any of user's true_organizations OR studied at any of
@@ -1473,11 +1658,47 @@ def _compute_related_counts_for_dests(db, dest_org_ids, user_id, exclude_emp_ids
     for exp in rel_exps:
         rel_exps_by_emp.setdefault(exp.employee_id, []).append(exp)
 
-    # Step 6: Build final output per dest org
+    # Step 6: Load educations and precompute match map once (for speed)
+    rel_edus = (
+        db.query(Education)
+        .filter(Education.employee_id.in_(related_emp_ids))
+        .all()
+    )
+    rel_edus_by_emp = {}
+    for edu in rel_edus:
+        rel_edus_by_emp.setdefault(edu.employee_id, []).append(edu)
+    for eid in related_emp_ids:
+        rel_edus_by_emp.setdefault(eid, [])
+
+    rel_school_ids = {e.school_id for e in rel_edus if e.school_id}
+    rel_school_names = {}
+    if rel_school_ids:
+        for s in db.query(School).filter(School.id.in_(rel_school_ids)).all():
+            rel_school_names[s.id] = s.name
+
+    if connection_filters:
+        global_match_map, global_match_details = _alumni_pass_connection_filters(
+            db,
+            user_id,
+            list(related_emp_ids),
+            rel_exps_by_emp,
+            rel_edus_by_emp,
+            connection_filters,
+            org_names=rel_org_names,
+            role_names=rel_role_names,
+            school_names=rel_school_names,
+            return_details=True,
+        )
+    else:
+        global_match_map = {eid: True for eid in related_emp_ids}
+        global_match_details = {eid: {"work_matches": [], "education_matches": []} for eid in related_emp_ids}
+
+    # Step 7: Build final output per dest org
     final = {}
     for dest_org_id, data in result.items():
+        dest_emp_ids = list(data["emp_ids"])
         related_list = []
-        for eid in data["emp_ids"]:
+        for eid in dest_emp_ids:
             in_company = eid in data["emp_ids_company"]
             in_school = eid in data["emp_ids_school"]
             if in_company and in_school:
@@ -1499,10 +1720,14 @@ def _compute_related_counts_for_dests(db, dest_org_ids, user_id, exclude_emp_ids
                 "employee_name": emp_name_by_id.get(eid, "Unknown"),
                 "connection_type": conn_type,
                 "experience_history": history,
+                "is_match": bool(global_match_map.get(eid, False)),
+                "filter_match_details": global_match_details.get(eid, {"work_matches": [], "education_matches": []}),
             })
-        related_list.sort(key=lambda x: x["employee_name"])
+        related_list.sort(key=lambda x: (not x["is_match"], x["employee_name"]))
+        match_count = sum(1 for person in related_list if person.get("is_match"))
         final[dest_org_id] = {
             "count": data["count"],
+            "match_count": match_count,
             "related": related_list,
         }
     return final

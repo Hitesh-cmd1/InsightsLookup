@@ -20,6 +20,7 @@ const CompanyDetails = () => {
     startYear,
     endYear,
     role,
+    connectionFilters,
   } = location.state || {};
 
   const [hop, setHop] = useState(initialHop || 1);
@@ -30,6 +31,11 @@ const CompanyDetails = () => {
   const [relatedBackground, setRelatedBackground] = useState([]);
   const [loadingRelated, setLoadingRelated] = useState(false);
   const [peopleTab, setPeopleTab] = useState('transition'); // 'transition' | 'related'
+  const hasConnectionFilters = (() => {
+    if (!connectionFilters || typeof connectionFilters !== 'object') return false;
+    const keys = ['past_companies', 'past_roles', 'tenure_options', 'colleges', 'departments', 'batch_options'];
+    return keys.some((k) => Array.isArray(connectionFilters[k]) && connectionFilters[k].length > 0);
+  })();
 
   useEffect(() => {
     if (employees.length === 0 && (relatedBackground || []).length > 0) setPeopleTab('related');
@@ -61,13 +67,15 @@ const CompanyDetails = () => {
       startDate,
       endDate,
       role: roleFilter || undefined,
+      connectionFilters: hasConnectionFilters ? connectionFilters : undefined,
     })
       .then((data) => {
         const list = Array.isArray(data) ? data : [];
         // Sort matched employees to the top
         list.sort((a, b) => {
-          if (a.role_match === b.role_match) return 0;
-          return a.role_match ? -1 : 1;
+          if ((a.is_match || false) !== (b.is_match || false)) return a.is_match ? -1 : 1;
+          if ((a.role_match || false) !== (b.role_match || false)) return a.role_match ? -1 : 1;
+          return String(a.employee_name || '').localeCompare(String(b.employee_name || ''));
         });
         setEmployees(list);
         trackCoreFeatureUsed('transition_analysis', {
@@ -83,7 +91,7 @@ const CompanyDetails = () => {
         setEmployees([]);
       })
       .finally(() => setLoading(false));
-  }, [sourceOrgId, destOrgId, hop, startYear, endYear, roleFilter, user, openLogin, authLoading, companyName]);
+  }, [sourceOrgId, destOrgId, hop, startYear, endYear, roleFilter, connectionFilters, hasConnectionFilters, user, openLogin, authLoading, companyName]);
 
   useEffect(() => {
     if (!sourceOrgId || !destOrgId || !user) return;
@@ -105,6 +113,35 @@ const CompanyDetails = () => {
   }, [sourceOrgId, destOrgId, startYear, endYear, user, location.state?.relatedBackground]);
 
   const totalEmployees = employees.length;
+
+  const getMatchDetails = (person) => {
+    const details = person?.filter_match_details;
+    if (!details || typeof details !== 'object') {
+      return { work_matches: [], education_matches: [] };
+    }
+    return {
+      work_matches: Array.isArray(details.work_matches) ? details.work_matches : [],
+      education_matches: Array.isArray(details.education_matches) ? details.education_matches : [],
+    };
+  };
+
+  const buildWorkKey = (item) => [
+    item?.organization || '',
+    item?.role || '',
+    item?.start_date || '',
+    item?.end_date || '',
+  ].join('|');
+
+  const experienceMatchedByFilter = (person, exp) => {
+    const details = getMatchDetails(person);
+    const workKeys = new Set((details.work_matches || []).map(buildWorkKey));
+    return workKeys.has(buildWorkKey(exp));
+  };
+
+  const personHasFilterEvidence = (person) => {
+    const details = getMatchDetails(person);
+    return (details.work_matches || []).length > 0 || (details.education_matches || []).length > 0;
+  };
 
   if (authLoading) {
     return (
@@ -309,7 +346,7 @@ const CompanyDetails = () => {
                   {employees.map((emp) => (
                     <div
                       key={emp.employee_id}
-                      className={`bg-white border rounded-xl p-4 shadow-sm ${emp.role_match
+                      className={`bg-white border rounded-xl p-4 shadow-sm ${((hasConnectionFilters && emp.is_match && personHasFilterEvidence(emp)) || (!hasConnectionFilters && emp.role_match))
                         ? 'border-blue-500 ring-1 ring-blue-500'
                         : 'border-[#E7E5E4]'
                         }`}
@@ -323,7 +360,12 @@ const CompanyDetails = () => {
                             >
                               {emp.employee_name || `Employee ${emp.employee_id}`}
                             </p>
-                            {emp.role_match && (
+                            {(hasConnectionFilters && emp.is_match && personHasFilterEvidence(emp)) && (
+                              <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider rounded-full">
+                                Filter Matched
+                              </span>
+                            )}
+                            {!hasConnectionFilters && emp.role_match && (
                               <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider rounded-full">
                                 Role Matched
                               </span>
@@ -335,6 +377,34 @@ const CompanyDetails = () => {
                         </div>
                       </div>
 
+                      {(hasConnectionFilters && emp.is_match && personHasFilterEvidence(emp)) && (
+                        <div className="mb-3 space-y-2">
+                          {(getMatchDetails(emp).work_matches || []).length > 0 && (
+                            <div>
+                              <p className="text-[11px] font-semibold text-blue-700 uppercase tracking-wide mb-1">Matched work criteria</p>
+                              <div className="flex flex-wrap gap-1.5">
+                                {(getMatchDetails(emp).work_matches || []).map((m, idx) => (
+                                  <span key={`trans-work-match-${idx}`} className="px-2 py-1 text-[11px] rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                                    {(m.organization || 'Unknown')} {m.role ? `• ${m.role}` : ''} {Array.isArray(m.matched_fields) && m.matched_fields.length > 0 ? `(${m.matched_fields.join(', ')})` : ''}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {(getMatchDetails(emp).education_matches || []).length > 0 && (
+                            <div>
+                              <p className="text-[11px] font-semibold text-blue-700 uppercase tracking-wide mb-1">Matched education criteria</p>
+                              <div className="flex flex-wrap gap-1.5">
+                                {(getMatchDetails(emp).education_matches || []).map((m, idx) => (
+                                  <span key={`trans-edu-match-${idx}`} className="px-2 py-1 text-[11px] rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                                    {(m.school || 'Unknown')} {m.degree ? `• ${m.degree}` : ''} {Array.isArray(m.matched_fields) && m.matched_fields.length > 0 ? `(${m.matched_fields.join(', ')})` : ''}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
                       <div>
                         <p className="text-xs font-medium text-[#78716C] mb-2">
                           Experience history
@@ -386,6 +456,7 @@ const CompanyDetails = () => {
                               {(emp.experience_history || []).map((exp, idx) => {
                                 const seg = exp.transition_segment || 'prior';
                                 const isHopUsed = seg === `hop_${hop}`;
+                                const filterMatchedRow = experienceMatchedByFilter(emp, exp);
                                 const rowClass =
                                   seg === 'source'
                                     ? 'bg-amber-50 border-b border-[#F5F5F4] border-l-4 border-l-amber-400'
@@ -407,7 +478,7 @@ const CompanyDetails = () => {
                                           ? `Hop ${seg.replace('hop_', '')}`
                                           : '—';
                                 return (
-                                  <tr key={idx} className={rowClass}>
+                                  <tr key={idx} className={`${rowClass} ${filterMatchedRow ? 'bg-blue-100/70' : ''}`}>
                                     <td className="px-3 py-2 text-[#1C1917]">
                                       {exp.organization || 'Unknown'}
                                     </td>
@@ -422,6 +493,11 @@ const CompanyDetails = () => {
                                     </td>
                                     <td className="px-3 py-2 text-[#78716C] font-medium">
                                       {label}
+                                      {filterMatchedRow && (
+                                        <span className="ml-2 px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-semibold uppercase tracking-wide">
+                                          Filter
+                                        </span>
+                                      )}
                                     </td>
                                   </tr>
                                 );
@@ -452,7 +528,7 @@ const CompanyDetails = () => {
                       {(relatedBackground || []).map((person) => (
                         <div
                           key={person.employee_id}
-                          className="bg-white border border-[#E7E5E4] rounded-xl p-4 shadow-sm"
+                          className={`bg-white border rounded-xl p-4 shadow-sm ${(person.is_match && personHasFilterEvidence(person)) ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/90' : 'border-[#E7E5E4]'}`}
                         >
                           <div className="flex justify-between items-center mb-3">
                             <div className="flex items-center gap-2">
@@ -462,8 +538,41 @@ const CompanyDetails = () => {
                               <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-medium uppercase tracking-wider rounded-full">
                                 {person.connection_type === 'past_company_and_college' ? 'Company & College' : person.connection_type === 'past_company' ? 'Past company' : 'College'}
                               </span>
+                              {(person.is_match && personHasFilterEvidence(person)) && (
+                                <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-semibold uppercase tracking-wider rounded-full">
+                                  Filter matched
+                                </span>
+                              )}
                             </div>
                           </div>
+                          {(person.is_match && personHasFilterEvidence(person)) && (
+                            <div className="mb-3 space-y-2">
+                              {(getMatchDetails(person).work_matches || []).length > 0 && (
+                                <div>
+                                  <p className="text-[11px] font-semibold text-blue-700 uppercase tracking-wide mb-1">Matched work criteria</p>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {(getMatchDetails(person).work_matches || []).map((m, idx) => (
+                                      <span key={`work-match-${idx}`} className="px-2 py-1 text-[11px] rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                                        {(m.organization || 'Unknown')} {m.role ? `• ${m.role}` : ''} {Array.isArray(m.matched_fields) && m.matched_fields.length > 0 ? `(${m.matched_fields.join(', ')})` : ''}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {(getMatchDetails(person).education_matches || []).length > 0 && (
+                                <div>
+                                  <p className="text-[11px] font-semibold text-blue-700 uppercase tracking-wide mb-1">Matched education criteria</p>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {(getMatchDetails(person).education_matches || []).map((m, idx) => (
+                                      <span key={`edu-match-${idx}`} className="px-2 py-1 text-[11px] rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                                        {(m.school || 'Unknown')} {m.degree ? `• ${m.degree}` : ''} {Array.isArray(m.matched_fields) && m.matched_fields.length > 0 ? `(${m.matched_fields.join(', ')})` : ''}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
                           <div>
                             <p className="text-xs font-medium text-[#78716C] mb-2">Experience history</p>
                             <div className="overflow-x-auto">
@@ -478,7 +587,7 @@ const CompanyDetails = () => {
                                 </thead>
                                 <tbody>
                                   {(person.experience_history || []).map((exp, idx) => (
-                                    <tr key={idx} className="border-b border-[#F5F5F4]">
+                                    <tr key={idx} className={`border-b ${experienceMatchedByFilter(person, exp) ? 'border-blue-200 bg-blue-50/60' : 'border-[#F5F5F4]'}`}>
                                       <td className="px-3 py-2 text-[#1C1917]">{exp.organization || '—'}</td>
                                       <td className="px-3 py-2 text-[#78716C]">{exp.role || '—'}</td>
                                       <td className="px-3 py-2 text-[#78716C]">{exp.start_date || '—'}</td>
@@ -504,4 +613,3 @@ const CompanyDetails = () => {
 };
 
 export default CompanyDetails;
-

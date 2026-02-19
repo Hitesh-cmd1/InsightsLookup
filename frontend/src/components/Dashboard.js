@@ -8,6 +8,47 @@ import { useAuth } from '../context/AuthContext';
 import { trackCoreFeatureUsed, incrementActivationCounter } from '../analytics/mixpanel';
 import { toast } from 'sonner';
 
+const CONNECTION_FILTERS_STORAGE_KEY = 'insightsConnectionFiltersState';
+
+function loadSavedConnectionFiltersState() {
+  try {
+    const raw = sessionStorage.getItem(CONNECTION_FILTERS_STORAGE_KEY);
+    if (!raw) {
+      return {
+        selectedPastCompanies: [],
+        selectedPastRoles: [],
+        selectedTenureOptions: [],
+        selectedColleges: [],
+        selectedDepartments: [],
+        selectedBatchOptions: [],
+        appliedConnectionFilters: null,
+      };
+    }
+    const parsed = JSON.parse(raw);
+    return {
+      selectedPastCompanies: Array.isArray(parsed.selectedPastCompanies) ? parsed.selectedPastCompanies : [],
+      selectedPastRoles: Array.isArray(parsed.selectedPastRoles) ? parsed.selectedPastRoles : [],
+      selectedTenureOptions: Array.isArray(parsed.selectedTenureOptions) ? parsed.selectedTenureOptions : [],
+      selectedColleges: Array.isArray(parsed.selectedColleges) ? parsed.selectedColleges : [],
+      selectedDepartments: Array.isArray(parsed.selectedDepartments) ? parsed.selectedDepartments : [],
+      selectedBatchOptions: Array.isArray(parsed.selectedBatchOptions) ? parsed.selectedBatchOptions : [],
+      appliedConnectionFilters: parsed.appliedConnectionFilters && typeof parsed.appliedConnectionFilters === 'object'
+        ? parsed.appliedConnectionFilters
+        : null,
+    };
+  } catch {
+    return {
+      selectedPastCompanies: [],
+      selectedPastRoles: [],
+      selectedTenureOptions: [],
+      selectedColleges: [],
+      selectedDepartments: [],
+      selectedBatchOptions: [],
+      appliedConnectionFilters: null,
+    };
+  }
+}
+
 /**
  * Transform API /org-transitions response into two sets of company cards:
  * - 1st Transitions view
@@ -79,7 +120,7 @@ function mapTransitions(apiResult, relatedByDest) {
       const recentYear = yearsArr.length ? Math.max(...yearsArr) : null;
       const otherHopsCount = entry.totalCount - hopCount;
       const relEntry = relMap[String(entry.organizationId)] || null;
-      const relatedCount = relEntry ? (relEntry.count || 0) : 0;
+      const relatedCount = relEntry ? ((relEntry.match_count ?? relEntry.count) || 0) : 0;
 
       cards.push({
         organizationId: entry.organizationId,
@@ -139,6 +180,7 @@ const Dashboard = () => {
     }
   })();
   const searchParams = { ...stateFromStorage, ...stateFromRoute };
+  const savedConnectionFilters = loadSavedConnectionFiltersState();
 
   const [topCompanyName, setTopCompanyName] = useState(searchParams.companyName || '');
   const [topStartYear, setTopStartYear] = useState(searchParams.startYear || '');
@@ -182,15 +224,19 @@ const Dashboard = () => {
 
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   // Multi-select connection filters (arrays). Empty = All/Any for that category.
-  const [selectedPastCompanies, setSelectedPastCompanies] = useState([]);
-  const [selectedPastRoles, setSelectedPastRoles] = useState([]);
-  const [selectedTenureOptions, setSelectedTenureOptions] = useState([]);
-  const [selectedColleges, setSelectedColleges] = useState([]);
-  const [selectedDepartments, setSelectedDepartments] = useState([]);
-  const [selectedBatchOptions, setSelectedBatchOptions] = useState([]);
+  const [selectedPastCompanies, setSelectedPastCompanies] = useState(savedConnectionFilters.selectedPastCompanies);
+  const [selectedPastRoles, setSelectedPastRoles] = useState(savedConnectionFilters.selectedPastRoles);
+  const [selectedTenureOptions, setSelectedTenureOptions] = useState(savedConnectionFilters.selectedTenureOptions);
+  const [selectedColleges, setSelectedColleges] = useState(savedConnectionFilters.selectedColleges);
+  const [selectedDepartments, setSelectedDepartments] = useState(savedConnectionFilters.selectedDepartments);
+  const [selectedBatchOptions, setSelectedBatchOptions] = useState(savedConnectionFilters.selectedBatchOptions);
   // Applied filters sent to API (set when user clicks Done in modal)
-  const [appliedConnectionFilters, setAppliedConnectionFilters] = useState(null);
+  const [appliedConnectionFilters, setAppliedConnectionFilters] = useState(savedConnectionFilters.appliedConnectionFilters);
   const lastFetchKeyRef = useRef(null);
+  const transitionsRequestSeqRef = useRef(0);
+  const firstTransitionsRef = useRef(null);
+  const secondTransitionsRef = useRef(null);
+  const thirdTransitionsRef = useRef(null);
 
   const isProfileEmpty = !profile || !(profile.work_experiences && profile.work_experiences.length > 0);
   const profileCompanies = useMemo(() => {
@@ -263,7 +309,35 @@ const Dashboard = () => {
     setSelectedDepartments([]);
     setSelectedBatchOptions([]);
     setAppliedConnectionFilters(null);
+    try {
+      sessionStorage.removeItem(CONNECTION_FILTERS_STORAGE_KEY);
+    } catch (_) { }
   };
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        CONNECTION_FILTERS_STORAGE_KEY,
+        JSON.stringify({
+          selectedPastCompanies,
+          selectedPastRoles,
+          selectedTenureOptions,
+          selectedColleges,
+          selectedDepartments,
+          selectedBatchOptions,
+          appliedConnectionFilters,
+        })
+      );
+    } catch (_) { }
+  }, [
+    selectedPastCompanies,
+    selectedPastRoles,
+    selectedTenureOptions,
+    selectedColleges,
+    selectedDepartments,
+    selectedBatchOptions,
+    appliedConnectionFilters,
+  ]);
 
   const buildConnectionFilters = () => {
     const companies = selectedPastCompanies ?? [];
@@ -418,9 +492,11 @@ const Dashboard = () => {
     const startDate = startYear ? `${startYear}-01-01` : null;
     const endDate = endYear ? `${endYear}-12-31` : null;
     const useDashboardData = !appliedConnectionFilters && !!(profile?.work_experiences?.length);
-    const fetchKey = `${orgId}-${startYear}-${endYear}-${contextRole || ''}-${appliedConnectionFilters ? 'f' : 'n'}-${useDashboardData ? 'd' : 't'}`;
+    const filtersKey = appliedConnectionFilters ? JSON.stringify(appliedConnectionFilters) : 'none';
+    const fetchKey = `${orgId}-${startYear}-${endYear}-${contextRole || ''}-${filtersKey}-${useDashboardData ? 'd' : 't'}`;
     if (lastFetchKeyRef.current === fetchKey) return;
     lastFetchKeyRef.current = fetchKey;
+    const requestSeq = ++transitionsRequestSeqRef.current;
 
     setLoading(true);
     setError(null);
@@ -428,6 +504,7 @@ const Dashboard = () => {
     if (useDashboardData) {
       getDashboardData(orgId, { startDate, endDate, hops: 3, role: contextRole })
         .then((data) => {
+          if (requestSeq !== transitionsRequestSeqRef.current) return;
           const transitions = data.transitions || {};
           const relatedByDestData = (typeof data.related_by_dest === 'object' && data.related_by_dest !== null)
             ? data.related_by_dest : {};
@@ -456,6 +533,7 @@ const Dashboard = () => {
           trackCoreFeatureUsed('hiring_pattern_view', { org_id: orgId, start_year: startYear, end_year: endYear, has_role_filter: !!contextRole });
         })
         .catch((err) => {
+          if (requestSeq !== transitionsRequestSeqRef.current) return;
           setError(err.message || 'Failed to load dashboard data');
           setCompaniesFirst([]);
           setCompaniesSecond([]);
@@ -464,12 +542,16 @@ const Dashboard = () => {
           setAlumni([]);
           setRelatedByDest({});
         })
-        .finally(() => setLoading(false));
+        .finally(() => {
+          if (requestSeq !== transitionsRequestSeqRef.current) return;
+          setLoading(false);
+        });
       return;
     }
 
     getOrgTransitions(orgId, { startDate, endDate, hops: 3, role: contextRole, connectionFilters: appliedConnectionFilters, includeRelated: true })
       .then((data) => {
+        if (requestSeq !== transitionsRequestSeqRef.current) return;
         const relatedByDestData = (typeof data.related_by_dest === 'object' && data.related_by_dest !== null)
           ? data.related_by_dest : {};
         const { firstHopCompanies, secondHopCompanies, thirdHopCompanies } = mapTransitions(data, relatedByDestData);
@@ -497,6 +579,7 @@ const Dashboard = () => {
         trackCoreFeatureUsed('hiring_pattern_view', { org_id: orgId, start_year: startYear, end_year: endYear, has_role_filter: !!contextRole });
       })
       .catch((err) => {
+        if (requestSeq !== transitionsRequestSeqRef.current) return;
         setError(err.message || 'Failed to load transitions');
         setCompaniesFirst([]);
         setCompaniesSecond([]);
@@ -504,7 +587,10 @@ const Dashboard = () => {
         setTotalAlumni(0);
         setRelatedByDest({});
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (requestSeq !== transitionsRequestSeqRef.current) return;
+        setLoading(false);
+      });
   }, [searchParams.orgId, searchParams.startYear, searchParams.endYear, contextRole, appliedConnectionFilters, profile, profileLoaded, user, openLogin, authLoading]);
 
   // Fetch alumni when the tab is active
@@ -565,10 +651,50 @@ const Dashboard = () => {
     if (!role) return Array.isArray(list) ? list : [];
     return (Array.isArray(list) ? list : []).filter((c) => highlightedOrgIds.has(c.organizationId));
   };
+  const isConnectionFilterActive = !!appliedConnectionFilters;
+  const prioritizeFilterMatches = (list) => {
+    const base = Array.isArray(list) ? [...list] : [];
+    if (!isConnectionFilterActive) return base;
+    base.sort((a, b) =>
+      Number((b.relatedCount || 0) > 0) - Number((a.relatedCount || 0) > 0) ||
+      (b.relatedCount || 0) - (a.relatedCount || 0) ||
+      (a.rank || 0) - (b.rank || 0)
+    );
+    return base.map((c, idx) => ({ ...c, rank: idx + 1 }));
+  };
 
-  const filteredCompaniesFirst = filterByRoleMatch(applyCommonFilters(companiesFirst ?? []));
-  const filteredCompaniesSecond = filterByRoleMatch(applyCommonFilters(companiesSecond ?? []));
-  const filteredCompaniesThird = filterByRoleMatch(applyCommonFilters(companiesThird ?? []));
+  const filteredCompaniesFirst = prioritizeFilterMatches(filterByRoleMatch(applyCommonFilters(companiesFirst ?? [])));
+  const filteredCompaniesSecond = prioritizeFilterMatches(filterByRoleMatch(applyCommonFilters(companiesSecond ?? [])));
+  const filteredCompaniesThird = prioritizeFilterMatches(filterByRoleMatch(applyCommonFilters(companiesThird ?? [])));
+  const appliedFiltersCount = useMemo(() => {
+    if (!appliedConnectionFilters || typeof appliedConnectionFilters !== 'object') return 0;
+    const keys = ['past_companies', 'past_roles', 'tenure_options', 'colleges', 'departments', 'batch_options'];
+    return keys.reduce((acc, k) => {
+      const v = appliedConnectionFilters[k];
+      return acc + (Array.isArray(v) ? v.length : 0);
+    }, 0);
+  }, [appliedConnectionFilters]);
+
+  const matchedCompaniesCount = useMemo(() => {
+    if (!isConnectionFilterActive) return 0;
+    const matched = new Set();
+    [...filteredCompaniesFirst, ...filteredCompaniesSecond, ...filteredCompaniesThird].forEach((c) => {
+      if ((c?.relatedCount || 0) > 0 && c?.organizationId != null) matched.add(c.organizationId);
+    });
+    return matched.size;
+  }, [isConnectionFilterActive, filteredCompaniesFirst, filteredCompaniesSecond, filteredCompaniesThird]);
+  const totalVisibleCompaniesCount = useMemo(() => {
+    const visible = new Set();
+    [...filteredCompaniesFirst, ...filteredCompaniesSecond, ...filteredCompaniesThird].forEach((c) => {
+      if (c?.organizationId != null) visible.add(c.organizationId);
+    });
+    return visible.size;
+  }, [filteredCompaniesFirst, filteredCompaniesSecond, filteredCompaniesThird]);
+
+  const scrollToTransitions = (which) => {
+    const ref = which === 1 ? firstTransitionsRef : which === 2 ? secondTransitionsRef : thirdTransitionsRef;
+    ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   const isOrgHighlighted = (orgId) => highlightedOrgIds.has(orgId);
 
@@ -820,7 +946,7 @@ const Dashboard = () => {
                 </select>
               </div>
             </div>
-            <div className="flex items-center gap-4 md:pl-4 md:border-l md:border-[#E7E5E4]">
+            <div className="flex items-center gap-4">
               <div className="text-right">
                 <p className="text-xs text-[#78716C]">Alumni in this view</p>
                 <p
@@ -916,15 +1042,19 @@ const Dashboard = () => {
                 setIsFilterOpen(true);
                 incrementActivationCounter('connections_filter_opened');
               }}
-              className="inline-flex items-center gap-2 px-3 py-2 border border-[#E7E5E4] rounded-lg text-sm font-medium text-[#1C1917] bg-white hover:bg-[#F5F5F4] transition-colors"
+              className={`inline-flex items-center gap-2 px-3 py-2 border rounded-lg text-sm font-medium transition-colors ${isConnectionFilterActive
+                ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                : 'border-[#E7E5E4] text-[#1C1917] bg-white hover:bg-[#F5F5F4]'
+                }`}
             >
-              <SlidersHorizontal className="w-4 h-4 text-[#78716C]" />
+              <SlidersHorizontal className={`w-4 h-4 ${isConnectionFilterActive ? 'text-white/70' : 'text-[#78716C]'}`} />
               Filters
+              {isConnectionFilterActive && appliedFiltersCount > 0 && (
+                <span className="inline-flex items-center justify-center rounded-full text-xs font-bold w-5 h-5 bg-[#3B82F6] text-white">
+                  {appliedFiltersCount}
+                </span>
+              )}
             </button>
-          </div>
-
-          {/* Clear All */}
-          <div className="flex items-center gap-6 mt-3">
             <button
               onClick={() => {
                 incrementActivationCounter('clear_filters_clicks');
@@ -936,7 +1066,9 @@ const Dashboard = () => {
               Clear All
             </button>
             <span className="text-sm text-[#78716C]">
-              Showing {(filteredCompaniesFirst ?? []).length} companies
+              {isConnectionFilterActive
+                ? `${matchedCompaniesCount}/${totalVisibleCompaniesCount} companies matched`
+                : `Showing ${totalVisibleCompaniesCount} companies`}
             </span>
           </div>
         </div>
@@ -1021,10 +1153,7 @@ const Dashboard = () => {
                           <button
                             type="button"
                             onClick={() => setSelectedPastCompanies([])}
-                            className={`px-3 py-1.5 rounded-full border text-xs font-medium ${(selectedPastCompanies ?? []).length === 0
-                              ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                              : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
-                              }`}
+                            className="px-3 py-1.5 rounded-full border text-xs font-medium bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]"
                           >
                             All
                           </button>
@@ -1059,10 +1188,7 @@ const Dashboard = () => {
                           <button
                             type="button"
                             onClick={() => setSelectedPastRoles([])}
-                            className={`px-3 py-1.5 rounded-full border text-xs font-medium ${(selectedPastRoles ?? []).length === 0
-                              ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                              : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
-                              }`}
+                            className="px-3 py-1.5 rounded-full border text-xs font-medium bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]"
                           >
                             Any Role
                           </button>
@@ -1142,10 +1268,7 @@ const Dashboard = () => {
                           <button
                             type="button"
                             onClick={() => setSelectedColleges([])}
-                            className={`px-3 py-1.5 rounded-full border text-xs font-medium ${(selectedColleges ?? []).length === 0
-                              ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                              : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
-                              }`}
+                            className="px-3 py-1.5 rounded-full border text-xs font-medium bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]"
                           >
                             All
                           </button>
@@ -1179,10 +1302,7 @@ const Dashboard = () => {
                           <button
                             type="button"
                             onClick={() => setSelectedDepartments([])}
-                            className={`px-3 py-1.5 rounded-full border text-xs font-medium ${(selectedDepartments ?? []).length === 0
-                              ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                              : 'bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]'
-                              }`}
+                            className="px-3 py-1.5 rounded-full border text-xs font-medium bg-white text-[#1C1917] border-[#E7E5E4] hover:bg-[#F5F5F4]"
                           >
                             Any Department
                           </button>
@@ -1361,7 +1481,7 @@ const Dashboard = () => {
         {activeTab === 'company-pathways' && (
           <div>
             {/* Section Header */}
-            <div className="flex items-center justify-between mb-6 bg-[#DBEAFE] px-6 py-4 rounded-lg">
+            <div ref={firstTransitionsRef} className="flex items-center justify-between mb-6 bg-[#DBEAFE] px-6 py-4 rounded-lg">
               <h2 className="text-lg font-semibold text-[#1C1917]">
                 1st Transitions
               </h2>
@@ -1398,7 +1518,7 @@ const Dashboard = () => {
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.05, duration: 0.4 }}
                       whileHover={{ y: -4 }}
-                      className={`bg-white border ${appliedConnectionFilters || isOrgHighlighted(company.organizationId)
+                      className={`bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && company.relatedCount > 0))
                         ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100'
                         : 'border-[#E7E5E4]'
                         } rounded-xl p-6 hover:shadow-md transition-all cursor-pointer`}
@@ -1416,6 +1536,7 @@ const Dashboard = () => {
                             startYear: searchParams.startYear,
                             endYear: searchParams.endYear,
                             role: contextRole,
+                            connectionFilters: appliedConnectionFilters,
                             relatedBackground: company.relatedBackground,
                           },
                         });
@@ -1531,7 +1652,7 @@ const Dashboard = () => {
             {/* 2nd Transitions Section */}
             {(filteredCompaniesSecond ?? []).length > 0 && (
               <>
-                <div className="flex items-center justify-between mt-10 mb-6 bg-[#F3E8FF] px-6 py-4 rounded-lg">
+                <div ref={secondTransitionsRef} className="flex items-center justify-between mt-10 mb-6 bg-[#F3E8FF] px-6 py-4 rounded-lg">
                   <h2 className="text-lg font-semibold text-[#1C1917]">
                     2nd Transitions
                   </h2>
@@ -1553,7 +1674,7 @@ const Dashboard = () => {
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.05, duration: 0.4 }}
                       whileHover={{ y: -4 }}
-                      className={`bg-white border ${appliedConnectionFilters || isOrgHighlighted(company.organizationId)
+                      className={`bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && company.relatedCount > 0))
                         ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100'
                         : 'border-[#E7E5E4]'
                         } rounded-xl p-6 hover:shadow-md transition-all cursor-pointer`}
@@ -1570,6 +1691,7 @@ const Dashboard = () => {
                             startYear: searchParams.startYear,
                             endYear: searchParams.endYear,
                             role: contextRole,
+                            connectionFilters: appliedConnectionFilters,
                             relatedBackground: company.relatedBackground,
                           },
                         });
@@ -1673,7 +1795,7 @@ const Dashboard = () => {
             {/* 3+ Transitions Section */}
             {(filteredCompaniesThird ?? []).length > 0 && (
               <>
-                <div className="flex items-center justify-between mt-10 mb-6 bg-[#D1FAE5] px-6 py-4 rounded-lg">
+                <div ref={thirdTransitionsRef} className="flex items-center justify-between mt-10 mb-6 bg-[#D1FAE5] px-6 py-4 rounded-lg">
                   <h2 className="text-lg font-semibold text-[#1C1917]">
                     3+ Transitions
                   </h2>
@@ -1695,7 +1817,7 @@ const Dashboard = () => {
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.05, duration: 0.4 }}
                       whileHover={{ y: -4 }}
-                      className={`bg-white border ${appliedConnectionFilters || isOrgHighlighted(company.organizationId)
+                      className={`bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && company.relatedCount > 0))
                         ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100'
                         : 'border-[#E7E5E4]'
                         } rounded-xl p-6 hover:shadow-md transition-all cursor-pointer`}
@@ -1712,6 +1834,7 @@ const Dashboard = () => {
                             startYear: searchParams.startYear,
                             endYear: searchParams.endYear,
                             role: contextRole,
+                            connectionFilters: appliedConnectionFilters,
                             relatedBackground: relatedByDest[company.organizationId] ?? null,
                           },
                         });
@@ -1840,7 +1963,7 @@ const Dashboard = () => {
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: index * 0.05, duration: 0.4 }}
-                    className={`bg-white border rounded-xl p-6 hover:shadow-md transition-all shadow-sm ${appliedConnectionFilters ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100' : 'border-[#E7E5E4]'}`}
+                    className={`bg-white border rounded-xl p-6 hover:shadow-md transition-all shadow-sm ${(appliedConnectionFilters && person.is_match) ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100' : 'border-[#E7E5E4]'}`}
                   >
                     <h3 className="text-lg font-bold text-[#1C1917] mb-1" style={{ fontFamily: "'Playfair Display', serif" }}>
                       {person.name}
@@ -1888,6 +2011,38 @@ const Dashboard = () => {
           </div>
         )}
       </div>
+
+      {activeTab === 'company-pathways' && !loading && !error && (
+        <div className="hidden xl:flex fixed right-5 top-1/2 -translate-y-1/2 z-30">
+          <div className="bg-white border border-[#E7E5E4] shadow-md rounded-xl p-2 flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={() => scrollToTransitions(1)}
+              className="px-3 py-2 text-xs font-semibold rounded-lg bg-[#DBEAFE] text-[#1E40AF] hover:bg-[#BFDBFE] transition-colors"
+            >
+              1st
+            </button>
+            {(filteredCompaniesSecond ?? []).length > 0 && (
+              <button
+                type="button"
+                onClick={() => scrollToTransitions(2)}
+                className="px-3 py-2 text-xs font-semibold rounded-lg bg-[#F3E8FF] text-[#6B21A8] hover:bg-[#E9D5FF] transition-colors"
+              >
+                2nd
+              </button>
+            )}
+            {(filteredCompaniesThird ?? []).length > 0 && (
+              <button
+                type="button"
+                onClick={() => scrollToTransitions(3)}
+                className="px-3 py-2 text-xs font-semibold rounded-lg bg-[#D1FAE5] text-[#065F46] hover:bg-[#A7F3D0] transition-colors"
+              >
+                3+
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
