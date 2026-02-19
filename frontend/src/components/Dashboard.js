@@ -690,7 +690,6 @@ const Dashboard = () => {
     });
     return visible.size;
   }, [filteredCompaniesFirst, filteredCompaniesSecond, filteredCompaniesThird]);
-
   const scrollToTransitions = (which) => {
     const ref = which === 1 ? firstTransitionsRef : which === 2 ? secondTransitionsRef : thirdTransitionsRef;
     ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
