@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Loader2, ArrowLeft } from 'lucide-react';
+import { Loader2, ArrowLeft, ExternalLink } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { getEmployeeTransitions, getRelatedBackground } from '../api/insights';
 import { useAuth } from '../context/AuthContext';
@@ -141,6 +141,29 @@ const CompanyDetails = () => {
   const personHasFilterEvidence = (person) => {
     const details = getMatchDetails(person);
     return (details.work_matches || []).length > 0 || (details.education_matches || []).length > 0;
+  };
+
+  const getTopCompanyNames = (experienceHistory = []) => {
+    const names = [];
+    const seen = new Set();
+    for (const exp of experienceHistory || []) {
+      const org = String(exp?.organization || '').trim();
+      const key = org.toLowerCase();
+      if (!org || seen.has(key)) continue;
+      seen.add(key);
+      names.push(org);
+      if (names.length >= 2) break;
+    }
+    return names;
+  };
+
+  const buildLinkedInSearchUrl = (name, companyNames = []) => {
+    const queryParts = [
+      String(name || '').trim(),
+      ...companyNames.slice(0, 2).map((c) => String(c || '').trim()).filter(Boolean),
+      'linkedin',
+    ].filter(Boolean);
+    return `https://www.google.com/search?q=${encodeURIComponent(queryParts.join(' '))}`;
   };
 
   if (authLoading) {
@@ -360,6 +383,15 @@ const CompanyDetails = () => {
                             >
                               {emp.employee_name || `Employee ${emp.employee_id}`}
                             </p>
+                            <a
+                              href={buildLinkedInSearchUrl(emp.employee_name || `Employee ${emp.employee_id}`, getTopCompanyNames(emp.experience_history))}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title={`Search ${(emp.employee_name || `Employee ${emp.employee_id}`)} on LinkedIn`}
+                              className="inline-flex items-center text-[#2563EB] hover:text-[#1D4ED8]"
+                            >
+                              <ExternalLink className="w-4 h-4" />
+                            </a>
                             {(hasConnectionFilters && emp.is_match && personHasFilterEvidence(emp)) && (
                               <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider rounded-full">
                                 Filter Matched
@@ -531,13 +563,22 @@ const CompanyDetails = () => {
                           className={`bg-white border rounded-xl p-4 shadow-sm ${(person.is_match && personHasFilterEvidence(person)) ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/90' : 'border-[#E7E5E4]'}`}
                         >
                           <div className="flex justify-between items-center mb-3">
-                            <div className="flex items-center gap-2">
-                              <p className="text-base font-semibold text-[#1C1917]" style={{ fontFamily: "'Playfair Display', serif" }}>
-                                {person.employee_name || `Employee ${person.employee_id}`}
-                              </p>
-                              <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-medium uppercase tracking-wider rounded-full">
-                                {person.connection_type === 'past_company_and_college' ? 'Company & College' : person.connection_type === 'past_company' ? 'Past company' : 'College'}
-                              </span>
+                          <div className="flex items-center gap-2">
+                            <p className="text-base font-semibold text-[#1C1917]" style={{ fontFamily: "'Playfair Display', serif" }}>
+                              {person.employee_name || `Employee ${person.employee_id}`}
+                            </p>
+                            <a
+                              href={buildLinkedInSearchUrl(person.employee_name || `Employee ${person.employee_id}`, getTopCompanyNames(person.experience_history))}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title={`Search ${(person.employee_name || `Employee ${person.employee_id}`)} on LinkedIn`}
+                              className="inline-flex items-center text-[#2563EB] hover:text-[#1D4ED8]"
+                            >
+                              <ExternalLink className="w-4 h-4" />
+                            </a>
+                            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-medium uppercase tracking-wider rounded-full">
+                              {person.connection_type === 'past_company_and_college' ? 'Company & College' : person.connection_type === 'past_company' ? 'Past company' : 'College'}
+                            </span>
                               {(person.is_match && personHasFilterEvidence(person)) && (
                                 <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-semibold uppercase tracking-wider rounded-full">
                                   Filter matched
