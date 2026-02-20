@@ -1,14 +1,51 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Search, X, ExternalLink, Loader2, LogOut, User as UserIcon, TrendingUp, SlidersHorizontal } from 'lucide-react';
+import { Search, X, ExternalLink, Loader2, LogOut, User as UserIcon, TrendingUp, SlidersHorizontal, Sparkles, Check } from 'lucide-react';
 import { AnimatePresence } from 'framer-motion';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { getOrgTransitions, getEmployeeTransitions, getAlumni, searchOrganizations, getProfile, getDashboardData } from '../api/insights';
+import { getOrgTransitions, getEmployeeTransitions, getAlumni, searchOrganizations, getProfile, getDashboardData, getLinkedinOrgIdsByCompanyNames } from '../api/insights';
 import { useAuth } from '../context/AuthContext';
 import { trackCoreFeatureUsed, incrementActivationCounter } from '../analytics/mixpanel';
 import { toast } from 'sonner';
 
 const CONNECTION_FILTERS_STORAGE_KEY = 'insightsConnectionFiltersState';
+const DASHBOARD_TOUR_STORAGE_KEY = 'insights_dashboard_tour_seen_v1';
+const DASHBOARD_TOUR_STEPS = [
+  {
+    key: 'context',
+    title: 'Find Career Paths',
+    description: 'Find where people from your background are getting hired. Enter a company, role, and time period to explore career moves.'
+  },
+  {
+    key: 'filters-group',
+    title: 'Search and filter',
+    description: 'Search name: Search any company to see if it appears in the transition list. Search role: Filter by role to see which companies hired for this specific position. Year: Select a year to view transitions that happened then. Tip — pick a year close to when you left this company. Transition: See where people go after their 1st, 2nd, or 3rd job after leaving this company.'
+  },
+  {
+    key: 'people-other',
+    title: 'People (other transitions)',
+    description: 'Count of employees who worked elsewhere after {{company b}}, but eventually landed at {{company a}}.'
+  },
+  {
+    key: 'recent',
+    title: 'Recent',
+    description: 'Last hired from {{company b}} in {{year}}.'
+  },
+  {
+    key: 'years-list',
+    title: 'Years list',
+    description: 'Years when {{company a}} hired from {{company b}}.'
+  },
+  {
+    key: 'connections-filter',
+    title: 'Filters',
+    description: 'Filter companies where you already have connections — from your past workplaces or college.'
+  },
+  {
+    key: 'company-card',
+    description: 'Click on this to view people involved in transition or related to your background.'
+  },
+];
 
 function loadSavedConnectionFiltersState() {
   try {
@@ -217,12 +254,19 @@ const Dashboard = () => {
   const [contextRole, setContextRole] = useState(stateFromStorage.role || '');
   const [contextApplying, setContextApplying] = useState(false);
   const [highlightedOrgIds, setHighlightedOrgIds] = useState(new Set());
+  const [selectedCards, setSelectedCards] = useState(new Map());
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const { logout } = useAuth();
   // Removed long mockCompanies list
   const years = Array.from({ length: 50 }, (_, i) => new Date().getFullYear() - i);
 
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [tourOpen, setTourOpen] = useState(false);
+  const [tourStep, setTourStep] = useState(0);
+  const [tourPanelPos, setTourPanelPos] = useState({ top: 24, left: 24, width: 420 });
+  const [isRoleModalOpen, setIsRoleModalOpen] = useState(false);
+  const [searchRoles, setSearchRoles] = useState([]);
+  const [roleInput, setRoleInput] = useState('');
   // Multi-select connection filters (arrays). Empty = All/Any for that category.
   const [selectedPastCompanies, setSelectedPastCompanies] = useState(savedConnectionFilters.selectedPastCompanies);
   const [selectedPastRoles, setSelectedPastRoles] = useState(savedConnectionFilters.selectedPastRoles);
@@ -237,6 +281,7 @@ const Dashboard = () => {
   const firstTransitionsRef = useRef(null);
   const secondTransitionsRef = useRef(null);
   const thirdTransitionsRef = useRef(null);
+  const hasAutoShownTourRef = useRef(false);
 
   const isProfileEmpty = !profile || !(profile.work_experiences && profile.work_experiences.length > 0);
   const profileCompanies = useMemo(() => {
@@ -723,7 +768,204 @@ const Dashboard = () => {
     ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  useEffect(() => {
+    if (hasAutoShownTourRef.current || authLoading) return;
+    hasAutoShownTourRef.current = true;
+    try {
+      const seen = localStorage.getItem(DASHBOARD_TOUR_STORAGE_KEY);
+      if (seen === '1') return;
+    } catch (_) { }
+    setTourOpen(true);
+    setTourStep(0);
+  }, [authLoading]);
+
+  useEffect(() => {
+    if (!tourOpen) return;
+    const step = DASHBOARD_TOUR_STEPS[tourStep];
+    if (!step) return;
+    if (['company-card', 'people-first', 'people-other', 'recent', 'years-list'].includes(step.key) && activeTab !== 'company-pathways') {
+      setActiveTab('company-pathways');
+      return;
+    }
+    const t = setTimeout(() => {
+      const node = document.querySelector(`[data-tour="${step.key}"]`);
+      if (node && typeof node.scrollIntoView === 'function') {
+        node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 120);
+    return () => clearTimeout(t);
+  }, [tourOpen, tourStep, activeTab]);
+
+  useEffect(() => {
+    if (!tourOpen) return;
+
+    const updatePanelPosition = () => {
+      const step = DASHBOARD_TOUR_STEPS[tourStep];
+      const node = step ? document.querySelector(`[data-tour="${step.key}"]`) : null;
+      const panelWidth = Math.min(420, Math.max(320, window.innerWidth - 32));
+
+      if (!node || typeof node.getBoundingClientRect !== 'function') {
+        setTourPanelPos({ top: 24, left: Math.max(16, window.innerWidth - panelWidth - 16), width: panelWidth });
+        return;
+      }
+
+      const rect = node.getBoundingClientRect();
+      const viewportW = window.innerWidth;
+      const viewportH = window.innerHeight;
+      const gap = 14;
+      const panelH = 220;
+
+      let left = rect.right + gap;
+      if (left + panelWidth > viewportW - 16) {
+        left = rect.left - panelWidth - gap;
+      }
+      if (left < 16) {
+        left = Math.max(16, viewportW - panelWidth - 16);
+      }
+
+      let top = rect.top + (rect.height / 2) - (panelH / 2);
+      if (top < 16) top = 16;
+      if (top + panelH > viewportH - 16) top = viewportH - panelH - 16;
+
+      setTourPanelPos({ top, left, width: panelWidth });
+    };
+
+    const t = setTimeout(updatePanelPosition, 140);
+    window.addEventListener('resize', updatePanelPosition);
+    window.addEventListener('scroll', updatePanelPosition, true);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener('resize', updatePanelPosition);
+      window.removeEventListener('scroll', updatePanelPosition, true);
+    };
+  }, [tourOpen, tourStep, activeTab, filteredCompaniesFirst]);
+
+  const isTourTarget = (key) => tourOpen && DASHBOARD_TOUR_STEPS[tourStep]?.key === key;
+  const sourceCompany = (topCompanyName || searchParams.companyName || 'company b').trim();
+  const targetCompany = String(filteredCompaniesFirst?.[0]?.name || 'company a').trim();
+  const recentYearForTour = String(filteredCompaniesFirst?.[0]?.recent || 'year');
+  const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const renderHighlightedTourText = (value) => {
+    const text = String(value || '');
+    const tokens = [sourceCompany, targetCompany, recentYearForTour]
+      .map((t) => String(t || '').trim())
+      .filter(Boolean);
+    const uniqueTokens = Array.from(new Set(tokens));
+    const tokenPattern = [
+      ...uniqueTokens
+        .sort((a, b) => b.length - a.length)
+        .map((t) => escapeRegex(t)),
+      '\\b(?:19|20)\\d{2}\\b',
+    ].join('|');
+    if (!tokenPattern) return text;
+    const regex = new RegExp(`(${tokenPattern})`, 'gi');
+    return text.split(regex).map((part, idx) => {
+      if (!part) return null;
+      const normalized = part.toLowerCase();
+      const isToken = uniqueTokens.some((t) => t.toLowerCase() === normalized);
+      const isYear = /\b(?:19|20)\d{2}\b/.test(part);
+      if (isToken || isYear) {
+        return (
+          <span
+            key={`${part}-${idx}`}
+            className="inline-flex items-center rounded-md bg-[#FEF3C7] text-[#92400E] font-semibold px-1.5 py-0.5 mx-0.5"
+          >
+            {part}
+          </span>
+        );
+      }
+      return <React.Fragment key={`${part}-${idx}`}>{part}</React.Fragment>;
+    });
+  };
+  const getTourDescription = () => {
+    const raw = String(DASHBOARD_TOUR_STEPS[tourStep]?.description || '');
+    return raw
+      .replaceAll('{{company b}}', sourceCompany)
+      .replaceAll('{{company a}}', targetCompany)
+      .replaceAll('{{year}}', recentYearForTour);
+  };
+  const startTour = () => {
+    setTourOpen(true);
+    setTourStep(0);
+  };
+  const closeTour = () => {
+    setTourOpen(false);
+    setTourStep(0);
+    try {
+      localStorage.setItem(DASHBOARD_TOUR_STORAGE_KEY, '1');
+    } catch (_) { }
+  };
+  const nextTourStep = () => {
+    if (tourStep >= DASHBOARD_TOUR_STEPS.length - 1) {
+      closeTour();
+      return;
+    }
+    setTourStep((prev) => prev + 1);
+  };
+  const prevTourStep = () => setTourStep((prev) => Math.max(0, prev - 1));
+
   const isOrgHighlighted = (orgId) => highlightedOrgIds.has(orgId);
+  const buildCardSelectionKey = (hop, company, index) => `${hop}:${company?.organizationId ?? company?.name ?? index}`;
+  const isCardSelected = (hop, company, index) => selectedCards.has(buildCardSelectionKey(hop, company, index));
+  const toggleCardSelected = (hop, company, index) => {
+    const key = buildCardSelectionKey(hop, company, index);
+    const name = String(company?.name || '').trim();
+    setSelectedCards((prev) => {
+      const next = new Map(prev);
+      if (next.has(key)) next.delete(key);
+      else next.set(key, name);
+      return next;
+    });
+  };
+  const clearSelectedCards = () => setSelectedCards(new Map());
+  const selectedCompanyNames = useMemo(() => {
+    const names = [];
+    const seen = new Set();
+    for (const value of selectedCards.values()) {
+      const n = String(value || '').trim();
+      const k = n.toLowerCase();
+      if (!n || seen.has(k)) continue;
+      seen.add(k);
+      names.push(n);
+    }
+    return names;
+  }, [selectedCards]);
+  const selectedCount = selectedCards.size;
+  const selectedPreview = selectedCompanyNames.slice(0, 3).join(', ');
+  const selectedOverflow = Math.max(0, selectedCompanyNames.length - 3);
+  const selectedSummaryText = selectedPreview
+    ? `${selectedPreview}${selectedOverflow > 0 ? ` +${selectedOverflow} more` : ''}`
+    : `${selectedCount} selected`;
+  const buildKeywordsFromRoles = (roles = []) => {
+    const tags = (Array.isArray(roles) ? roles : [])
+      .map((r) => String(r || '').trim())
+      .filter(Boolean);
+    if (tags.length === 0) return '';
+    if (tags.length === 1) return tags[0];
+    return tags.join(' OR ');
+  };
+  const openLinkedInJobsForSelection = async (roles = []) => {
+    const keywords = buildKeywordsFromRoles(roles);
+    try {
+      const data = await getLinkedinOrgIdsByCompanyNames(selectedCompanyNames);
+      const ids = Array.isArray(data?.linkedin_org_ids)
+        ? data.linkedin_org_ids
+          .map((v) => String(v || '').trim())
+          .filter((v) => /^\d+$/.test(v))
+        : [];
+
+      const params = new URLSearchParams();
+      if (keywords) params.set('keywords', keywords);
+      if (ids.length > 0) params.set('f_C', ids.join(','));
+      const q = params.toString();
+      const url = `https://www.linkedin.com/jobs/search-results/${q ? `?${q}` : ''}`;
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setIsRoleModalOpen(false);
+      setRoleInput('');
+    } catch (err) {
+      toast.error(err.message || 'Could not open LinkedIn jobs');
+    }
+  };
 
   // Filter alumni list
   const filteredAlumni = useMemo(() => {
@@ -809,8 +1051,58 @@ const Dashboard = () => {
 
   return (
     <div className="min-h-screen bg-[#FAFAF9]">
+      {tourOpen && (
+        <>
+          <div className="fixed inset-0 z-50 bg-[#1C1917]/35 pointer-events-none" />
+          <div
+            className="fixed z-[80] rounded-2xl border border-[#E7E5E4] bg-white p-5 shadow-xl"
+            style={{ top: `${tourPanelPos.top}px`, left: `${tourPanelPos.left}px`, width: `${tourPanelPos.width}px` }}
+          >
+            <p className="text-xs uppercase tracking-wide text-[#A8A29E]">
+              Step {tourStep + 1} of {DASHBOARD_TOUR_STEPS.length}
+            </p>
+            <h3 className="mt-1 text-lg font-bold text-[#1C1917]">{DASHBOARD_TOUR_STEPS[tourStep].title}</h3>
+            {DASHBOARD_TOUR_STEPS[tourStep]?.key === 'filters-group' ? (
+              <div className="mt-2 space-y-2 text-sm text-[#57534E]">
+                <p><span className="font-semibold text-[#1C1917]">Search name:</span> Search any company to see if it appears in the transition list.</p>
+                <p><span className="font-semibold text-[#1C1917]">Search role:</span> Filter by role to see which companies hired for this specific position.</p>
+                <p><span className="font-semibold text-[#1C1917]">Year:</span> Select a year to view transitions that happened then. Tip — pick a year close to when you left this company.</p>
+                <p><span className="font-semibold text-[#1C1917]">Transition:</span> See where people go after their 1st, 2nd, or 3rd job after leaving this company.</p>
+              </div>
+            ) : (
+              <p className="mt-1 text-sm text-[#57534E]">{renderHighlightedTourText(getTourDescription())}</p>
+            )}
+            <div className="mt-4 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={closeTour}
+                className="text-sm text-[#78716C] hover:text-[#1C1917] transition-colors"
+              >
+                Skip tour
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={prevTourStep}
+                  disabled={tourStep === 0}
+                  className="h-10 px-4 rounded-full border border-[#E7E5E4] text-sm font-medium text-[#1C1917] disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={nextTourStep}
+                  className="h-10 px-5 rounded-full bg-[#1C1917] text-sm font-semibold text-[#FAFAF9]"
+                >
+                  {tourStep === DASHBOARD_TOUR_STEPS.length - 1 ? 'Finish' : 'Next'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
       {/* Header */}
-      <header className="bg-white border-b border-[#E7E5E4]">
+      <header className="bg-white border-b border-[#E7E5E4] sticky top-0 z-50">
         <div className="max-w-[1600px] mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div
@@ -829,6 +1121,22 @@ const Dashboard = () => {
             </div>
           </div>
           <div className="flex items-center gap-6">
+            {!tourOpen && (
+              <button
+                type="button"
+                onClick={startTour}
+                title="Start product tour"
+                aria-label="Start product tour"
+                className="group h-10 w-10 hover:w-32 hover:-translate-x-1 rounded-full border border-[#E7E5E4] bg-white shadow-sm hover:shadow-md transition-all duration-300 overflow-hidden flex items-center"
+              >
+                <span className="w-10 h-10 flex items-center justify-center shrink-0">
+                  <Sparkles className="w-5 h-5 text-[#F59E0B]" />
+                </span>
+                <span className="text-sm font-semibold text-[#1C1917] whitespace-nowrap max-w-0 opacity-0 group-hover:max-w-[88px] group-hover:opacity-100 transition-all duration-300">
+                  start tour
+                </span>
+              </button>
+            )}
             <div className="relative">
               {user ? (
                 <div className="flex items-center gap-4">
@@ -892,7 +1200,10 @@ const Dashboard = () => {
       {/* Company + tenure summary */}
       <div className="bg-white border-b border-[#E7E5E4]">
         <div className="max-w-[1600px] mx-auto px-6 py-4">
-          <div className="bg-[#F9FAFB] border border-[#E7E5E4] rounded-2xl px-4 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div
+            className={`bg-[#F9FAFB] border border-[#E7E5E4] rounded-2xl px-4 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4 ${isTourTarget('context') ? 'relative z-[70] ring-4 ring-[#F59E0B]/50' : ''}`}
+            data-tour="context"
+          >
             <div className="space-y-2 text-sm text-[#44403C]">
               <p className="text-xs font-semibold uppercase tracking-wide text-[#78716C]">
                 Career transitions context
@@ -996,107 +1307,178 @@ const Dashboard = () => {
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="bg-white border-b border-[#E7E5E4]">
-        <div className="max-w-[1600px] mx-auto px-6 py-4">
-          <div className="flex flex-wrap gap-3 items-center">
-            {/* Search */}
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#78716C]" />
-              <input
-                type="text"
-                placeholder="Search name..."
-                value={searchName}
-                onChange={(e) => setSearchName(e.target.value)}
-                className="pl-9 pr-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917] w-48"
-                data-testid="search-name-input"
-              />
+      <div className="sticky top-[73px] z-30">
+        {/* Filters */}
+        <div className="bg-white border-b border-[#E7E5E4]">
+          <div className="max-w-[1600px] mx-auto px-6 py-4">
+            <div className="flex flex-wrap gap-3 items-center">
+              <div
+                className={`flex flex-wrap gap-3 items-center ${isTourTarget('filters-group') ? 'relative z-[60] ring-4 ring-[#F59E0B]/45 rounded-xl p-2 -m-2' : ''}`}
+                data-tour="filters-group"
+              >
+                {/* Search */}
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#78716C]" />
+                  <input
+                    type="text"
+                    placeholder="Search name..."
+                    value={searchName}
+                    onChange={(e) => setSearchName(e.target.value)}
+                    className="pl-9 pr-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917] w-48"
+                    data-testid="search-name-input"
+                  />
+                </div>
+
+                {/* Role Search */}
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#78716C]" />
+                  <input
+                    type="text"
+                    placeholder="Role (e.g. Product)..."
+                    value={contextRole}
+                    onChange={(e) => setContextRole(e.target.value)}
+                    onBlur={applyRoleContext}
+                    onKeyDown={(e) => e.key === 'Enter' && applyRoleContext()}
+                    className="pl-9 pr-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917] w-48"
+                    data-testid="role-search-input"
+                  />
+                </div>
+
+                {/* Year Filter */}
+                <select
+                  value={selectedYear}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setSelectedYear(v);
+                    if (v !== 'all') incrementActivationCounter('year_filter_applied');
+                  }}
+                  className="px-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917] bg-white cursor-pointer"
+                  data-testid="year-filter"
+                >
+                  <option value="all">All Years</option>
+                  {years.map(year => (
+                    <option key={year} value={year}>{year}</option>
+                  ))}
+                </select>
+
+                {/* Transitions Filter */}
+                <select
+                  value={selectedTransition}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setSelectedTransition(v);
+                    if (v !== 'all') incrementActivationCounter('transition_filter_applied');
+                  }}
+                  className="px-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917] bg-white cursor-pointer"
+                  data-testid="transition-filter"
+                >
+                  <option value="all">All Transitions</option>
+                  <option value="1">1 Transition</option>
+                  <option value="2">2 Transitions</option>
+                  <option value="3+">3+ Transitions</option>
+                </select>
+              </div>
+
+              {/* Advanced Connections Filter */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsFilterOpen(true);
+                  incrementActivationCounter('connections_filter_opened');
+                }}
+                className={`inline-flex items-center gap-2 px-3 py-2 border rounded-lg text-sm font-medium transition-colors ${isConnectionFilterActive
+                  ? 'bg-[#1C1917] text-white border-[#1C1917]'
+                  : 'border-[#E7E5E4] text-[#1C1917] bg-white hover:bg-[#F5F5F4]'
+                  } ${isTourTarget('connections-filter') ? 'relative z-[70] ring-4 ring-[#F59E0B]/55' : ''}`}
+                data-tour="connections-filter"
+              >
+                <SlidersHorizontal className={`w-4 h-4 ${isConnectionFilterActive ? 'text-white/70' : 'text-[#78716C]'}`} />
+                Filters
+                {isConnectionFilterActive && appliedFiltersCount > 0 && (
+                  <span className="inline-flex items-center justify-center rounded-full text-xs font-bold w-5 h-5 bg-[#3B82F6] text-white">
+                    {appliedFiltersCount}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => {
+                  incrementActivationCounter('clear_filters_clicks');
+                  clearAllFilters();
+                }}
+                className="ml-auto text-sm text-[#3B82F6] hover:underline"
+                data-testid="clear-all-button"
+              >
+                Clear All
+              </button>
+              <span className="text-sm text-[#78716C]">
+                {isConnectionFilterActive
+                  ? `${matchedCompaniesCount}/${totalVisibleCompaniesCount} companies matched`
+                  : `Showing ${totalVisibleCompaniesCount} companies`}
+              </span>
             </div>
+          </div>
+        </div>
 
-            {/* Role Search */}
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#78716C]" />
-              <input
-                type="text"
-                placeholder="Role (e.g. Product)..."
-                value={contextRole}
-                onChange={(e) => setContextRole(e.target.value)}
-                onBlur={applyRoleContext}
-                onKeyDown={(e) => e.key === 'Enter' && applyRoleContext()}
-                className="pl-9 pr-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917] w-48"
-                data-testid="role-search-input"
-              />
+        {/* Tabs */}
+        <div
+          className={`bg-white border-b border-[#E7E5E4] ${isTourTarget('tabs') ? 'relative z-[60] ring-4 ring-[#F59E0B]/45' : ''}`}
+          data-tour="tabs"
+        >
+          <div className="max-w-[1600px] mx-auto px-6">
+            <div className="flex gap-8">
+              <button
+                onClick={() => {
+                  if (activeTab !== 'company-pathways') incrementActivationCounter('tabs_switched');
+                  setActiveTab('company-pathways');
+                }}
+                className={`py-4 px-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'company-pathways'
+                  ? 'border-[#3B82F6] text-[#3B82F6]'
+                  : 'border-transparent text-[#78716C] hover:text-[#1C1917]'
+                  }`}
+                data-testid="company-pathways-tab"
+              >
+                Company Pathways
+              </button>
+              <button
+                onClick={() => {
+                  if (activeTab !== 'career-transitions') incrementActivationCounter('tabs_switched');
+                  setActiveTab('career-transitions');
+                }}
+                className={`py-4 px-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'career-transitions'
+                  ? 'border-[#3B82F6] text-[#3B82F6]'
+                  : 'border-transparent text-[#78716C] hover:text-[#1C1917]'
+                  }`}
+                data-testid="career-transitions-tab"
+              >
+                Career Transitions
+              </button>
+              <button
+                onClick={() => {
+                  if (activeTab !== 'alumni') incrementActivationCounter('tabs_switched');
+                  setActiveTab('alumni');
+                }}
+                className={`py-4 px-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'alumni'
+                  ? 'border-[#3B82F6] text-[#3B82F6]'
+                  : 'border-transparent text-[#78716C] hover:text-[#1C1917]'
+                  }`}
+                data-testid="alumni-tab"
+              >
+                Alumni ({totalAlumni})
+              </button>
+              <button
+                onClick={() => {
+                  if (activeTab !== 'statistics') incrementActivationCounter('tabs_switched');
+                  setActiveTab('statistics');
+                }}
+                className={`py-4 px-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'statistics'
+                  ? 'border-[#3B82F6] text-[#3B82F6]'
+                  : 'border-transparent text-[#78716C] hover:text-[#1C1917]'
+                  }`}
+                data-testid="statistics-tab"
+              >
+                Statistics
+              </button>
             </div>
-
-            {/* Year Filter */}
-            <select
-              value={selectedYear}
-              onChange={(e) => {
-                const v = e.target.value;
-                setSelectedYear(v);
-                if (v !== 'all') incrementActivationCounter('year_filter_applied');
-              }}
-              className="px-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917] bg-white cursor-pointer"
-              data-testid="year-filter"
-            >
-              <option value="all">All Years</option>
-              {years.map(year => (
-                <option key={year} value={year}>{year}</option>
-              ))}
-            </select>
-
-            {/* Transitions Filter */}
-            <select
-              value={selectedTransition}
-              onChange={(e) => {
-                const v = e.target.value;
-                setSelectedTransition(v);
-                if (v !== 'all') incrementActivationCounter('transition_filter_applied');
-              }}
-              className="px-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917] bg-white cursor-pointer"
-              data-testid="transition-filter"
-            >
-              <option value="all">All Transitions</option>
-              <option value="1">1 Transition</option>
-              <option value="2">2 Transitions</option>
-              <option value="3+">3+ Transitions</option>
-            </select>
-
-            {/* Advanced Connections Filter */}
-            <button
-              type="button"
-              onClick={() => {
-                setIsFilterOpen(true);
-                incrementActivationCounter('connections_filter_opened');
-              }}
-              className={`inline-flex items-center gap-2 px-3 py-2 border rounded-lg text-sm font-medium transition-colors ${isConnectionFilterActive
-                ? 'bg-[#1C1917] text-white border-[#1C1917]'
-                : 'border-[#E7E5E4] text-[#1C1917] bg-white hover:bg-[#F5F5F4]'
-                }`}
-            >
-              <SlidersHorizontal className={`w-4 h-4 ${isConnectionFilterActive ? 'text-white/70' : 'text-[#78716C]'}`} />
-              Filters
-              {isConnectionFilterActive && appliedFiltersCount > 0 && (
-                <span className="inline-flex items-center justify-center rounded-full text-xs font-bold w-5 h-5 bg-[#3B82F6] text-white">
-                  {appliedFiltersCount}
-                </span>
-              )}
-            </button>
-            <button
-              onClick={() => {
-                incrementActivationCounter('clear_filters_clicks');
-                clearAllFilters();
-              }}
-              className="ml-auto text-sm text-[#3B82F6] hover:underline"
-              data-testid="clear-all-button"
-            >
-              Clear All
-            </button>
-            <span className="text-sm text-[#78716C]">
-              {isConnectionFilterActive
-                ? `${matchedCompaniesCount}/${totalVisibleCompaniesCount} companies matched`
-                : `Showing ${totalVisibleCompaniesCount} companies`}
-            </span>
           </div>
         </div>
       </div>
@@ -1120,11 +1502,10 @@ const Dashboard = () => {
               <div className="flex items-start justify-between px-6 pt-5 pb-4 border-b border-[#E7E5E4]">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-[#3B82F6]">
-                    My connections — filter who counts
+                    Advanced Connections
                   </p>
                   <p className="mt-1 text-sm text-[#78716C] max-w-xl">
-                    These filters don&apos;t change which destination companies are shown. They only help you
-                    see where you already have a warm connection.
+                    We'll highlight companies where people like you are working so you can get warm intros.
                   </p>
                 </div>
                 <button
@@ -1136,16 +1517,15 @@ const Dashboard = () => {
                   <X className="w-4 h-4" />
                 </button>
               </div>
-
               <div className="relative px-6 py-5">
                 {isProfileEmpty && (
                   <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80 backdrop-blur-sm rounded-b-2xl">
                     <div className="max-w-md mx-4 text-center px-6 py-8">
                       <p className="text-lg font-semibold text-[#1C1917]">
-                        To unlock advanced filters, please complete your profile.
+                        Add your profile to use advanced filters.
                       </p>
                       <p className="mt-3 text-sm text-[#57534E]">
-                        Adding your work history and education lets you filter by past company connections and college networks—so you can see which destination companies have people you worked with or studied with.
+                        Add your work history and education so we can show which companies have people with similar backgrounds.
                       </p>
                       <button
                         type="button"
@@ -1166,16 +1546,16 @@ const Dashboard = () => {
                     <div className="flex items-center gap-2">
                       <span className="w-2.5 h-2.5 rounded-full bg-[#22C55E]" />
                       <h3 className="text-sm font-semibold text-[#1C1917]">
-                        Past company connections
+                        Work history
                       </h3>
                     </div>
                     <p className="text-xs text-[#78716C]">
-                      Use your work history to find colleagues who are now at these destination companies.
+                      Find ex-colleagues who are working at these companies.
                     </p>
 
                     <div className="space-y-3">
                       <div>
-                        <p className="text-xs font-medium text-[#57534E] mb-2">Which company (multi-select)</p>
+                        <p className="text-xs font-medium text-[#57534E] mb-2">Past company (multi-select)</p>
                         <div className="flex flex-wrap gap-2">
                           <button
                             type="button"
@@ -1210,7 +1590,7 @@ const Dashboard = () => {
                       </div>
 
                       <div>
-                        <p className="text-xs font-medium text-[#57534E] mb-2">Their role (multi-select)</p>
+                        <p className="text-xs font-medium text-[#57534E] mb-2">Job title(multi-select)</p>
                         <div className="flex flex-wrap gap-2">
                           <button
                             type="button"
@@ -1276,21 +1656,21 @@ const Dashboard = () => {
                     </div>
                   </div>
 
-                  {/* College Connections */}
+                  {/* Education */}
                   <div className="space-y-4">
                     <div className="flex items-center gap-2">
                       <span className="w-2.5 h-2.5 rounded-full bg-[#EF4444]" />
                       <h3 className="text-sm font-semibold text-[#1C1917]">
-                        College connections
+                        Education
                       </h3>
                     </div>
                     <p className="text-xs text-[#78716C]">
-                      Use your colleges and degrees to find batchmates, seniors, and juniors at each destination company.
+                      Find batchmates and alumni at these companies.
                     </p>
 
                     <div className="space-y-3">
                       <div>
-                        <p className="text-xs font-medium text-[#57534E] mb-2">Which college (multi-select)</p>
+                        <p className="text-xs font-medium text-[#57534E] mb-2">College / university (multi-select)</p>
                         <div className="flex flex-wrap gap-2">
                           <button
                             type="button"
@@ -1395,8 +1775,7 @@ const Dashboard = () => {
 
               <div className="px-6 py-4 border-t border-[#E7E5E4] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-[#F9FAFB]">
                 <p className="text-xs text-[#57534E] max-w-xl">
-                  These filters will use your work and education from your profile to rank destination companies by
-                  where you have the warmest intros — not to remove companies from the list.
+                  Highlights companies where matches exist — doesn't change the list.
                 </p>
                 {isProfileEmpty ? (
                   <button
@@ -1443,68 +1822,8 @@ const Dashboard = () => {
         )}
       </AnimatePresence>
 
-      {/* Tabs */}
-      <div className="bg-white border-b border-[#E7E5E4]">
-        <div className="max-w-[1600px] mx-auto px-6">
-          <div className="flex gap-8">
-            <button
-              onClick={() => {
-                if (activeTab !== 'company-pathways') incrementActivationCounter('tabs_switched');
-                setActiveTab('company-pathways');
-              }}
-              className={`py-4 px-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'company-pathways'
-                ? 'border-[#3B82F6] text-[#3B82F6]'
-                : 'border-transparent text-[#78716C] hover:text-[#1C1917]'
-                }`}
-              data-testid="company-pathways-tab"
-            >
-              Company Pathways
-            </button>
-            <button
-              onClick={() => {
-                if (activeTab !== 'career-transitions') incrementActivationCounter('tabs_switched');
-                setActiveTab('career-transitions');
-              }}
-              className={`py-4 px-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'career-transitions'
-                ? 'border-[#3B82F6] text-[#3B82F6]'
-                : 'border-transparent text-[#78716C] hover:text-[#1C1917]'
-                }`}
-              data-testid="career-transitions-tab"
-            >
-              Career Transitions
-            </button>
-            <button
-              onClick={() => {
-                if (activeTab !== 'alumni') incrementActivationCounter('tabs_switched');
-                setActiveTab('alumni');
-              }}
-              className={`py-4 px-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'alumni'
-                ? 'border-[#3B82F6] text-[#3B82F6]'
-                : 'border-transparent text-[#78716C] hover:text-[#1C1917]'
-                }`}
-              data-testid="alumni-tab"
-            >
-              Alumni ({totalAlumni})
-            </button>
-            <button
-              onClick={() => {
-                if (activeTab !== 'statistics') incrementActivationCounter('tabs_switched');
-                setActiveTab('statistics');
-              }}
-              className={`py-4 px-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'statistics'
-                ? 'border-[#3B82F6] text-[#3B82F6]'
-                : 'border-transparent text-[#78716C] hover:text-[#1C1917]'
-                }`}
-              data-testid="statistics-tab"
-            >
-              Statistics
-            </button>
-          </div>
-        </div>
-      </div>
-
       {/* Main Content */}
-      <div className="max-w-[1600px] mx-auto px-6 py-8">
+      <div className={`max-w-[1600px] mx-auto px-6 py-8 ${selectedCount > 0 ? 'pb-32' : ''}`}>
         {activeTab === 'company-pathways' && (
           <div>
             {/* Section Header */}
@@ -1545,10 +1864,11 @@ const Dashboard = () => {
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.05, duration: 0.4 }}
                       whileHover={{ y: -4 }}
-                      className={`bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && company.relatedCount > 0))
+                      className={`relative overflow-hidden bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && company.relatedCount > 0))
                         ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100'
                         : 'border-[#E7E5E4]'
-                        } rounded-xl p-6 hover:shadow-md transition-all cursor-pointer`}
+                        } rounded-xl p-6 hover:shadow-md transition-all cursor-pointer ${(isTourTarget('company-card') && index === 0) ? 'relative z-[60] ring-4 ring-[#F59E0B]/50' : ''} ${isCardSelected(1, company, index) ? 'shadow-[inset_0_0_0_2px_rgba(59,130,246,0.45)]' : ''}`}
+                      data-tour={index === 0 ? 'company-card' : undefined}
                       data-testid={`company-card-${company.rank}`}
                       onClick={() => {
                         incrementActivationCounter('company_card_clicks', false);
@@ -1569,6 +1889,7 @@ const Dashboard = () => {
                         });
                       }}
                     >
+                      <div className={`absolute left-0 top-0 h-full ${isCardSelected(1, company, index) ? 'w-2 bg-[#3B82F6]' : 'w-px bg-[#E7E5E4]'}`} />
                       {/* Rank Badge + Related Badge */}
                       <div className="flex items-center gap-2 mb-3">
                         <div className="inline-flex items-center justify-center bg-[#3B82F6] text-white text-sm font-bold rounded px-2 py-1">
@@ -1580,6 +1901,17 @@ const Dashboard = () => {
                             <span>{company.relatedCount} connection{company.relatedCount !== 1 ? 's' : ''}</span>
                           </div>
                         )}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleCardSelected(1, company, index);
+                          }}
+                          className={`ml-auto w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${isCardSelected(1, company, index) ? 'bg-[#3B82F6] border-[#3B82F6]' : 'bg-white border-[#D6D3D1] hover:border-[#3B82F6]'}`}
+                          aria-label={isCardSelected(1, company, index) ? 'Unselect card' : 'Select card'}
+                        >
+                          {isCardSelected(1, company, index) && <Check className="w-3.5 h-3.5 text-white" />}
+                        </button>
                       </div>
 
                       {/* Company Name */}
@@ -1623,13 +1955,19 @@ const Dashboard = () => {
 
                       {/* People and Recent */}
                       <div className="grid grid-cols-2 gap-4 mb-4 pb-4 border-b border-[#E7E5E4]">
-                        <div>
-                          <p className="text-xs text-[#78716C] mb-1">People (1st transition):</p>
+                        <div
+                          className={`${isTourTarget('people-first') && index === 0 ? 'rounded-lg ring-4 ring-[#F59E0B]/45 p-2 -m-2' : ''}`}
+                          data-tour={index === 0 ? 'people-first' : undefined}
+                        >
+                          <p className="text-xs text-[#78716C] mb-1">People (1st transition only):</p>
                           <p className="text-xl font-bold text-[#1C1917]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
                             {company.people}
                           </p>
                         </div>
-                        <div>
+                        <div
+                          className={`${isTourTarget('people-other') && index === 0 ? 'rounded-lg ring-4 ring-[#F59E0B]/45 p-2 -m-2' : ''}`}
+                          data-tour={index === 0 ? 'people-other' : undefined}
+                        >
                           <p className="text-xs text-[#78716C] mb-1">People (other transitions):</p>
                           <p className="text-xl font-bold text-[#1C1917]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
                             {company.otherHopsCount}
@@ -1637,7 +1975,10 @@ const Dashboard = () => {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-1 gap-4 mb-4 pb-4 border-b border-[#E7E5E4]">
+                      <div
+                        className={`grid grid-cols-1 gap-4 mb-4 pb-4 border-b border-[#E7E5E4] ${isTourTarget('recent') && index === 0 ? 'rounded-lg ring-4 ring-[#F59E0B]/45 p-2 -m-2' : ''}`}
+                        data-tour={index === 0 ? 'recent' : undefined}
+                      >
                         <div>
                           <p className="text-xs text-[#78716C] mb-1">Recent:</p>
                           <p className="text-xl font-bold text-[#1C1917]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
@@ -1660,7 +2001,10 @@ const Dashboard = () => {
                       </div>
 
                       {/* Years */}
-                      <div className="flex flex-wrap gap-2">
+                      <div
+                        className={`flex flex-wrap gap-2 ${isTourTarget('years-list') && index === 0 ? 'rounded-lg ring-4 ring-[#F59E0B]/45 p-2 -m-2' : ''}`}
+                        data-tour={index === 0 ? 'years-list' : undefined}
+                      >
                         {(company.years || []).map((year, i) => (
                           <span
                             key={i}
@@ -1701,10 +2045,10 @@ const Dashboard = () => {
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.05, duration: 0.4 }}
                       whileHover={{ y: -4 }}
-                      className={`bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && company.relatedCount > 0))
+                      className={`relative overflow-hidden bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && company.relatedCount > 0))
                         ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100'
                         : 'border-[#E7E5E4]'
-                        } rounded-xl p-6 hover:shadow-md transition-all cursor-pointer`}
+                        } rounded-xl p-6 hover:shadow-md transition-all cursor-pointer ${isCardSelected(2, company, index) ? 'shadow-[inset_0_0_0_2px_rgba(59,130,246,0.45)]' : ''}`}
                       onClick={() => {
                         incrementActivationCounter('company_card_clicks', false);
                         incrementActivationCounter('company_cards_opened');
@@ -1724,6 +2068,7 @@ const Dashboard = () => {
                         });
                       }}
                     >
+                      <div className={`absolute left-0 top-0 h-full ${isCardSelected(2, company, index) ? 'w-2 bg-[#3B82F6]' : 'w-px bg-[#E7E5E4]'}`} />
                       <div className="flex items-center gap-2 mb-3">
                         <div className="inline-flex items-center justify-center bg-[#A855F7] text-white text-sm font-bold rounded px-2 py-1">
                           #{company.rank}
@@ -1734,6 +2079,17 @@ const Dashboard = () => {
                             <span>{company.relatedCount} connection{company.relatedCount !== 1 ? 's' : ''}</span>
                           </div>
                         )}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleCardSelected(2, company, index);
+                          }}
+                          className={`ml-auto w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${isCardSelected(2, company, index) ? 'bg-[#3B82F6] border-[#3B82F6]' : 'bg-white border-[#D6D3D1] hover:border-[#3B82F6]'}`}
+                          aria-label={isCardSelected(2, company, index) ? 'Unselect card' : 'Select card'}
+                        >
+                          {isCardSelected(2, company, index) && <Check className="w-3.5 h-3.5 text-white" />}
+                        </button>
                       </div>
 
                       <div className="flex items-start gap-2 mb-4">
@@ -1844,10 +2200,10 @@ const Dashboard = () => {
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.05, duration: 0.4 }}
                       whileHover={{ y: -4 }}
-                      className={`bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && company.relatedCount > 0))
+                      className={`relative overflow-hidden bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && company.relatedCount > 0))
                         ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100'
                         : 'border-[#E7E5E4]'
-                        } rounded-xl p-6 hover:shadow-md transition-all cursor-pointer`}
+                        } rounded-xl p-6 hover:shadow-md transition-all cursor-pointer ${isCardSelected(3, company, index) ? 'shadow-[inset_0_0_0_2px_rgba(59,130,246,0.45)]' : ''}`}
                       onClick={() => {
                         incrementActivationCounter('company_card_clicks', false);
                         incrementActivationCounter('company_cards_opened');
@@ -1867,8 +2223,22 @@ const Dashboard = () => {
                         });
                       }}
                     >
-                      <div className="inline-flex items-center justify-center bg-[#059669] text-white text-sm font-bold rounded px-2 py-1 mb-3">
-                        #{company.rank}
+                      <div className={`absolute left-0 top-0 h-full ${isCardSelected(3, company, index) ? 'w-2 bg-[#3B82F6]' : 'w-px bg-[#E7E5E4]'}`} />
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="inline-flex items-center justify-center bg-[#059669] text-white text-sm font-bold rounded px-2 py-1">
+                          #{company.rank}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleCardSelected(3, company, index);
+                          }}
+                          className={`ml-auto w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${isCardSelected(3, company, index) ? 'bg-[#3B82F6] border-[#3B82F6]' : 'bg-white border-[#D6D3D1] hover:border-[#3B82F6]'}`}
+                          aria-label={isCardSelected(3, company, index) ? 'Unselect card' : 'Select card'}
+                        >
+                          {isCardSelected(3, company, index) && <Check className="w-3.5 h-3.5 text-white" />}
+                        </button>
                       </div>
 
                       <div className="flex items-start gap-2 mb-4">
@@ -2081,6 +2451,151 @@ const Dashboard = () => {
           </div>
         </div>
       )}
+
+      <AnimatePresence>
+        {selectedCount > 0 && (
+          <motion.div
+            initial={{ y: 20, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 20, opacity: 0 }}
+            className="fixed inset-x-0 bottom-6 z-[100] px-6 flex justify-center pointer-events-none"
+          >
+            <div className="max-w-[1200px] w-full bg-[#1C1917]/95 backdrop-blur-md rounded-3xl border border-[#292524] shadow-2xl p-4 flex items-center gap-4 pointer-events-auto">
+              <div className="w-12 h-12 rounded-2xl bg-[#3B82F6] text-white font-bold text-xl flex items-center justify-center shrink-0 shadow-lg shadow-[#3B82F6]/25">
+                {selectedCount}
+              </div>
+              <div className="min-w-0 pr-4">
+                <p className="text-[#FAFAF9] text-lg font-semibold truncate">{selectedSummaryText}</p>
+                <p className="text-[#A8A29E] text-sm">selected for comparison</p>
+              </div>
+              <div className="ml-auto flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={clearSelectedCards}
+                  className="h-11 px-6 rounded-2xl border border-[#44403C] text-[#FAFAF9] hover:bg-white/10 transition-all font-semibold text-sm"
+                >
+                  Clear Selection
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsRoleModalOpen(true)}
+                  className="h-11 px-7 rounded-2xl bg-[#3B82F6] text-white font-semibold hover:bg-[#2563EB] transition-all inline-flex items-center text-sm shadow-lg shadow-[#3B82F6]/20"
+                >
+                  Find Jobs
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Role Selection Modal */}
+      <AnimatePresence>
+        {isRoleModalOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[110] flex items-end justify-center p-0 bg-black/40 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="bg-white rounded-t-[40px] shadow-2xl w-full max-w-2xl overflow-hidden border-t border-[#E7E5E4]"
+            >
+              <div className="flex flex-col items-center pt-4 pb-2">
+                <div className="w-12 h-1.5 bg-[#E7E5E4] rounded-full" />
+              </div>
+              <div className="p-8 pt-4">
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="w-10 h-10 rounded-xl bg-[#3B82F6]/10 flex items-center justify-center">
+                    <Search className="w-5 h-5 text-[#3B82F6]" />
+                  </div>
+                  <h2 className="text-2xl font-bold text-[#1C1917]" style={{ fontFamily: "'Playfair Display', serif" }}>
+                    What role are you looking for?
+                  </h2>
+                </div>
+                <p className="text-sm text-[#78716C] mb-8 line-clamp-2">
+                  Searching at <span className="font-semibold text-[#1C1917]">{selectedCompanyNames.join(', ')}</span>
+                </p>
+
+                <div className="relative mb-6">
+                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#A8A29E]" />
+                  <input
+                    autoFocus
+                    type="text"
+                    value={roleInput}
+                    onChange={(e) => setRoleInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && roleInput.trim()) {
+                        if (!searchRoles.includes(roleInput.trim())) {
+                          setSearchRoles([...searchRoles, roleInput.trim()]);
+                        }
+                        setRoleInput('');
+                      }
+                    }}
+                    placeholder="Search or type a role..."
+                    className="w-full pl-12 pr-4 h-14 bg-[#F9FAFB] border border-[#E7E5E4] rounded-2xl text-[#1C1917] placeholder-[#A8A29E] focus:outline-none focus:border-[#3B82F6] focus:ring-4 focus:ring-[#3B82F6]/5 transition-all"
+                  />
+                  {roleInput.trim() && (
+                    <button
+                      onClick={() => {
+                        if (!searchRoles.includes(roleInput.trim())) {
+                          setSearchRoles([...searchRoles, roleInput.trim()]);
+                        }
+                        setRoleInput('');
+                      }}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 h-8 px-3 bg-[#1C1917] text-white text-xs font-bold rounded-lg hover:bg-black transition-all"
+                    >
+                      Add
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap gap-2 mb-8 min-h-[40px]">
+                  {searchRoles.map((role) => (
+                    <button
+                      key={role}
+                      onClick={() => setSearchRoles(searchRoles.filter(r => r !== role))}
+                      className="group flex items-center gap-2 px-4 py-2 bg-[#F1F5F9] hover:bg-red-50 text-[#475569] hover:text-red-600 rounded-full text-sm font-medium border border-[#E2E8F0] hover:border-red-100 transition-all"
+                    >
+                      {role}
+                      <X className="w-3.5 h-3.5 opacity-60 group-hover:opacity-100" />
+                    </button>
+                  ))}
+                  {searchRoles.length === 0 && (
+                    <p className="text-sm text-[#A8A29E] italic mt-2">No roles added yet. Press Enter to add tags.</p>
+                  )}
+                </div>
+
+                <div className="flex flex-col gap-3 pb-8">
+                  <button
+                    disabled={searchRoles.length === 0}
+                    onClick={() => openLinkedInJobsForSelection(searchRoles)}
+                    className={`h-14 w-full rounded-2xl font-bold flex items-center justify-center transition-all ${searchRoles.length > 0
+                        ? 'bg-[#1C1917] text-[#FAFAF9] hover:bg-black shadow-lg shadow-black/10'
+                        : 'bg-[#F1F5F9] text-[#94A3B8] cursor-not-allowed'
+                      }`}
+                  >
+                    {searchRoles.length > 0 ? `Find at ${selectedCount} Companies` : 'Select at least one role'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIsRoleModalOpen(false);
+                      setRoleInput('');
+                    }}
+                    className="h-12 w-full text-[#78716C] font-semibold hover:text-[#1C1917] transition-all text-sm"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

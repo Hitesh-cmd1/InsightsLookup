@@ -82,6 +82,7 @@ class Organization(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False, unique=True)
+    linkedin_org_id = Column(String, nullable=True, index=True)
 
     experiences = relationship("Experience", back_populates="organization")
 
@@ -253,4 +254,3 @@ __all__ = [
     "TrueEducation",
     "TrueSkill",
 ]
-

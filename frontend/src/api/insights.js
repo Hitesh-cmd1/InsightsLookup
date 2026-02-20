@@ -206,6 +206,25 @@ export async function getRelatedBackground(sourceOrgId, destOrgId, { startDate, 
   return res.json();
 }
 
+export async function getLinkedinOrgIdsByCompanyNames(companyNames = []) {
+  const list = Array.isArray(companyNames)
+    ? companyNames.map((n) => String(n || '').trim()).filter(Boolean)
+    : [];
+  if (list.length === 0) return { linkedin_org_ids: [], by_company: {} };
+
+  const url = API_BASE ? `${API_BASE}/linkedin-org-ids` : '/linkedin-org-ids';
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ company_names: list }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to fetch linkedin org ids: ${res.status}`);
+  }
+  return res.json();
+}
+
 /**
  * Auth Endpoints
  */

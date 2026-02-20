@@ -880,6 +880,51 @@ def search_organizations():
         )
 
 
+@app.post("/linkedin-org-ids")
+@token_required
+def get_linkedin_org_ids():
+    """
+    POST /linkedin-org-ids
+    Payload: {"company_names": ["Company A", "Company B", ...]}
+
+    Returns numeric linkedin_org_id values for exact company-name matches (case-insensitive).
+    Non-numeric/empty linkedin_org_id values are omitted.
+    """
+    data = request.json or {}
+    names = data.get("company_names")
+    if not isinstance(names, list):
+        return jsonify({"error": "company_names must be an array"}), 400
+
+    cleaned_names = [str(n).strip() for n in names if str(n).strip()]
+    if not cleaned_names:
+        return jsonify({"linkedin_org_ids": [], "by_company": {}})
+
+    lower_to_original = {}
+    for name in cleaned_names:
+        key = name.lower()
+        if key not in lower_to_original:
+            lower_to_original[key] = name
+
+    for db in get_db():
+        rows = (
+            db.query(Organization.name, Organization.linkedin_org_id)
+            .filter(func.lower(Organization.name).in_(list(lower_to_original.keys())))
+            .all()
+        )
+
+        by_company = {}
+        ids = []
+        for org_name, linkedin_org_id in rows:
+            lid = str(linkedin_org_id).strip() if linkedin_org_id is not None else ""
+            if not lid.isdigit():
+                continue
+            by_company[org_name] = lid
+            ids.append(lid)
+
+        unique_ids = list(dict.fromkeys(ids))
+        return jsonify({"linkedin_org_ids": unique_ids, "by_company": by_company})
+
+
 @app.get("/org-transitions")
 @token_required
 def org_transitions():

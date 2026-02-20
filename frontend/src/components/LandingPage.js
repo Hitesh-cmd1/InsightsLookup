@@ -166,7 +166,6 @@ const LandingPage = () => {
 
   return (
     <div className="min-h-screen bg-[#FAFAF9]">
-
       {/* Header */}
       <header className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-6 sm:px-12 py-6">
         <div

@@ -11,6 +11,9 @@ from db.models import (
     Experience,
     Education,
 )
+from scraping import search_org_candidates, choose_best_match
+
+LINKEDIN_MATCH_MIN_SCORE = 78.0
 
 
 def _parse_date_part(s):
@@ -88,6 +91,20 @@ def get_or_create_lookup(session, model, name_field, name_value):
     obj = model(**{name_field: name_value})
     session.add(obj)
     session.flush()  # assign PK
+
+    # For new organizations, resolve and store LinkedIn org id immediately.
+    if model is Organization:
+        try:
+            candidates = search_org_candidates(name_value)
+            best, score = choose_best_match(name_value, candidates)
+            if best and score >= LINKEDIN_MATCH_MIN_SCORE:
+                obj.linkedin_org_id = str(best.get("id"))
+                session.add(obj)
+                session.flush()
+        except Exception:
+            # Keep insert path resilient; unresolved LinkedIn id can be filled later.
+            pass
+
     return obj
 
 
