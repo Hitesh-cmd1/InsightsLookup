@@ -386,6 +386,24 @@ const Dashboard = () => {
     ].filter(Boolean);
     return `https://www.google.com/search?q=${encodeURIComponent(queryParts.join(' '))}`;
   };
+  const buildCompanyDetailsUrl = (company, hopValue) => {
+    const params = new URLSearchParams();
+    if (searchParams.orgId != null) params.set('sourceOrgId', String(searchParams.orgId));
+    if (company?.organizationId != null) params.set('destOrgId', String(company.organizationId));
+    if (company?.name) params.set('companyName', String(company.name));
+    if (hopValue != null) params.set('hop', String(hopValue));
+    if (searchParams.startYear) params.set('startYear', String(searchParams.startYear));
+    if (searchParams.endYear) params.set('endYear', String(searchParams.endYear));
+    if (contextRole) params.set('role', String(contextRole));
+    if (appliedConnectionFilters && typeof appliedConnectionFilters === 'object') {
+      params.set('cf', JSON.stringify(appliedConnectionFilters));
+    }
+    return `/company-details?${params.toString()}`;
+  };
+  const openCompanyDetailsInNewTab = (company, hopValue) => {
+    const url = buildCompanyDetailsUrl(company, hopValue);
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
 
   useEffect(() => {
     try {
@@ -1874,19 +1892,7 @@ const Dashboard = () => {
                         incrementActivationCounter('company_card_clicks', false);
                         incrementActivationCounter('company_cards_opened');
                         trackCoreFeatureUsed('company_card_opened', { hop: 1, company_name: company.name, dest_org_id: company.organizationId });
-                        navigate('/company-details', {
-                          state: {
-                            sourceOrgId: searchParams.orgId,
-                            destOrgId: company.organizationId,
-                            companyName: company.name,
-                            hop: 1,
-                            startYear: searchParams.startYear,
-                            endYear: searchParams.endYear,
-                            role: contextRole,
-                            connectionFilters: appliedConnectionFilters,
-                            relatedBackground: company.relatedBackground,
-                          },
-                        });
+                        openCompanyDetailsInNewTab(company, 1);
                       }}
                     >
                       <div className={`absolute left-0 top-0 h-full ${isCardSelected(1, company, index) ? 'w-2 bg-[#3B82F6]' : 'w-px bg-[#E7E5E4]'}`} />
@@ -2053,19 +2059,7 @@ const Dashboard = () => {
                         incrementActivationCounter('company_card_clicks', false);
                         incrementActivationCounter('company_cards_opened');
                         trackCoreFeatureUsed('company_card_opened', { hop: 2, company_name: company.name, dest_org_id: company.organizationId });
-                        navigate('/company-details', {
-                          state: {
-                            sourceOrgId: searchParams.orgId,
-                            destOrgId: company.organizationId,
-                            companyName: company.name,
-                            hop: 2,
-                            startYear: searchParams.startYear,
-                            endYear: searchParams.endYear,
-                            role: contextRole,
-                            connectionFilters: appliedConnectionFilters,
-                            relatedBackground: company.relatedBackground,
-                          },
-                        });
+                        openCompanyDetailsInNewTab(company, 2);
                       }}
                     >
                       <div className={`absolute left-0 top-0 h-full ${isCardSelected(2, company, index) ? 'w-2 bg-[#3B82F6]' : 'w-px bg-[#E7E5E4]'}`} />
@@ -2208,19 +2202,7 @@ const Dashboard = () => {
                         incrementActivationCounter('company_card_clicks', false);
                         incrementActivationCounter('company_cards_opened');
                         trackCoreFeatureUsed('company_card_opened', { hop: 3, company_name: company.name, dest_org_id: company.organizationId });
-                        navigate('/company-details', {
-                          state: {
-                            sourceOrgId: searchParams.orgId,
-                            destOrgId: company.organizationId,
-                            companyName: company.name,
-                            hop: 3,
-                            startYear: searchParams.startYear,
-                            endYear: searchParams.endYear,
-                            role: contextRole,
-                            connectionFilters: appliedConnectionFilters,
-                            relatedBackground: relatedByDest[company.organizationId] ?? null,
-                          },
-                        });
+                        openCompanyDetailsInNewTab(company, 3);
                       }}
                     >
                       <div className={`absolute left-0 top-0 h-full ${isCardSelected(3, company, index) ? 'w-2 bg-[#3B82F6]' : 'w-px bg-[#E7E5E4]'}`} />
@@ -2575,8 +2557,8 @@ const Dashboard = () => {
                     disabled={searchRoles.length === 0}
                     onClick={() => openLinkedInJobsForSelection(searchRoles)}
                     className={`h-14 w-full rounded-2xl font-bold flex items-center justify-center transition-all ${searchRoles.length > 0
-                        ? 'bg-[#1C1917] text-[#FAFAF9] hover:bg-black shadow-lg shadow-black/10'
-                        : 'bg-[#F1F5F9] text-[#94A3B8] cursor-not-allowed'
+                      ? 'bg-[#1C1917] text-[#FAFAF9] hover:bg-black shadow-lg shadow-black/10'
+                      : 'bg-[#F1F5F9] text-[#94A3B8] cursor-not-allowed'
                       }`}
                   >
                     {searchRoles.length > 0 ? `Find at ${selectedCount} Companies` : 'Select at least one role'}

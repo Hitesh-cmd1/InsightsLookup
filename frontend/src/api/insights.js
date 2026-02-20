@@ -185,8 +185,9 @@ export async function getDashboardData(orgId, { startDate, endDate, hops = 3, ro
 
 /**
  * Fetch related-background people at a destination company (not from transition).
+ * Optional connectionFilters annotates filter matches (is_match + filter_match_details).
  */
-export async function getRelatedBackground(sourceOrgId, destOrgId, { startDate, endDate } = {}) {
+export async function getRelatedBackground(sourceOrgId, destOrgId, { startDate, endDate, connectionFilters } = {}) {
   const source = sourceOrgId != null ? Number(sourceOrgId) : null;
   const dest = destOrgId != null ? Number(destOrgId) : null;
   if (source == null || Number.isNaN(source) || dest == null || Number.isNaN(dest)) {
@@ -195,6 +196,8 @@ export async function getRelatedBackground(sourceOrgId, destOrgId, { startDate, 
   const params = new URLSearchParams({ source_org_id: String(source), dest_org_id: String(dest) });
   if (startDate) params.set('start_date', startDate);
   if (endDate) params.set('end_date', endDate);
+  const cf = buildConnectionFiltersParam(connectionFilters);
+  if (cf) params.set('connection_filters', cf);
   const url = API_BASE
     ? `${API_BASE}/related-background?${params.toString()}`
     : `/related-background?${params.toString()}`;

@@ -1781,7 +1781,7 @@ def _compute_related_counts_for_dests(db, dest_org_ids, user_id, exclude_emp_ids
     return final
 
 
-def _compute_related_background(db, source_org_id, dest_org_id, start_date, end_date, user_id):
+def _compute_related_background(db, source_org_id, dest_org_id, start_date, end_date, user_id, connection_filters=None):
     """
     Returns {"transition_employee_ids": list[int], "related": list[dict]} for one (source, dest) pair.
     Used by /related-background and by dashboard-data / org-transitions to include related for all dests.
@@ -1921,6 +1921,40 @@ def _compute_related_background(db, source_org_id, dest_org_id, start_date, end_
     for exp in rel_exps:
         rel_exps_by_emp.setdefault(exp.employee_id, []).append(exp)
 
+    rel_edus = (
+        db.query(Education)
+        .filter(Education.employee_id.in_(related_emp_ids))
+        .all()
+    )
+    rel_edus_by_emp = {}
+    for edu in rel_edus:
+        rel_edus_by_emp.setdefault(edu.employee_id, []).append(edu)
+    for eid in related_emp_ids:
+        rel_edus_by_emp.setdefault(eid, [])
+
+    rel_school_ids = {e.school_id for e in rel_edus if e.school_id}
+    rel_school_names = {}
+    if rel_school_ids:
+        for s in db.query(School).filter(School.id.in_(rel_school_ids)).all():
+            rel_school_names[s.id] = s.name
+
+    if connection_filters:
+        related_match_map, related_match_details = _alumni_pass_connection_filters(
+            db,
+            user_id,
+            list(related_emp_ids),
+            rel_exps_by_emp,
+            rel_edus_by_emp,
+            connection_filters,
+            org_names=rel_org_names,
+            role_names=rel_role_names,
+            school_names=rel_school_names,
+            return_details=True,
+        )
+    else:
+        related_match_map = {eid: False for eid in related_emp_ids}
+        related_match_details = {eid: {"work_matches": [], "education_matches": []} for eid in related_emp_ids}
+
     related_list = []
     for eid in related_emp_ids:
         connection_type = "past_company" if eid in emp_ids_with_company_match else "college"
@@ -1939,8 +1973,10 @@ def _compute_related_background(db, source_org_id, dest_org_id, start_date, end_
             "employee_name": emp_name_by_id.get(eid, "Unknown"),
             "connection_type": connection_type,
             "experience_history": history,
+            "is_match": bool(related_match_map.get(eid, False)),
+            "filter_match_details": related_match_details.get(eid, {"work_matches": [], "education_matches": []}),
         })
-    related_list.sort(key=lambda x: x["employee_name"])
+    related_list.sort(key=lambda x: (not x.get("is_match", False), x["employee_name"]))
     return {"transition_employee_ids": list(transition_employee_ids), "related": related_list}
 
 
@@ -1959,6 +1995,7 @@ def related_background():
     dest_org_id = request.args.get("dest_org_id", type=int)
     start_date_str = request.args.get("start_date")
     end_date_str = request.args.get("end_date")
+    connection_filters = _parse_connection_filters()
     if not source_org_id or not dest_org_id:
         return jsonify({"error": "Missing source_org_id or dest_org_id"}), 400
     start_date = parse_date(start_date_str)
@@ -1968,7 +2005,15 @@ def related_background():
         return jsonify({"transition_employee_ids": [], "related": []})
 
     for db in get_db():
-        out = _compute_related_background(db, source_org_id, dest_org_id, start_date, end_date, user_id)
+        out = _compute_related_background(
+            db,
+            source_org_id,
+            dest_org_id,
+            start_date,
+            end_date,
+            user_id,
+            connection_filters=connection_filters,
+        )
         return jsonify(out)
     return jsonify({"transition_employee_ids": [], "related": []})
 

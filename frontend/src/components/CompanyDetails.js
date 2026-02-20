@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Loader2, ArrowLeft, ExternalLink } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -7,21 +7,71 @@ import { useAuth } from '../context/AuthContext';
 import { trackCoreFeatureUsed } from '../analytics/mixpanel';
 import { TrendingUp, LogOut, User as UserIcon } from 'lucide-react';
 
+const CONNECTION_FILTERS_STORAGE_KEY = 'insightsConnectionFiltersState';
+
 const CompanyDetails = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, openLogin, logout, loading: authLoading } = useAuth();
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const resolvedParams = useMemo(() => {
+    const queryParams = new URLSearchParams(location.search);
+    const parseIntOrNull = (value) => {
+      if (value == null || value === '') return null;
+      const n = Number(value);
+      return Number.isNaN(n) ? null : n;
+    };
+    const parsedConnectionFilters = (() => {
+      const raw = queryParams.get('cf');
+      if (!raw) return null;
+      try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+      } catch {
+        try {
+          const decoded = decodeURIComponent(raw);
+          const parsed = JSON.parse(decoded);
+          return parsed && typeof parsed === 'object' ? parsed : null;
+        } catch {
+          return null;
+        }
+      }
+    })();
+    const storedConnectionFilters = (() => {
+      try {
+        const raw = sessionStorage.getItem(CONNECTION_FILTERS_STORAGE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        const applied = parsed?.appliedConnectionFilters;
+        return applied && typeof applied === 'object' ? applied : null;
+      } catch {
+        return null;
+      }
+    })();
+    const routeState = location.state || {};
+    return {
+      sourceOrgId: routeState.sourceOrgId ?? parseIntOrNull(queryParams.get('sourceOrgId')),
+      destOrgId: routeState.destOrgId ?? parseIntOrNull(queryParams.get('destOrgId')),
+      companyName: routeState.companyName ?? queryParams.get('companyName') ?? '',
+      initialHop: routeState.hop ?? parseIntOrNull(queryParams.get('hop')) ?? 1,
+      startYear: routeState.startYear ?? queryParams.get('startYear') ?? '',
+      endYear: routeState.endYear ?? queryParams.get('endYear') ?? '',
+      role: routeState.role ?? queryParams.get('role') ?? '',
+      connectionFilters: routeState.connectionFilters ?? parsedConnectionFilters ?? storedConnectionFilters,
+      prefetchedRelatedBackground: routeState.relatedBackground,
+    };
+  }, [location.search, location.state]);
   const {
     sourceOrgId,
     destOrgId,
     companyName,
-    hop: initialHop,
+    initialHop,
     startYear,
     endYear,
     role,
     connectionFilters,
-  } = location.state || {};
+    prefetchedRelatedBackground,
+  } = resolvedParams;
 
   const [hop, setHop] = useState(initialHop || 1);
   const [roleFilter, setRoleFilter] = useState(role || '');
@@ -31,16 +81,49 @@ const CompanyDetails = () => {
   const [relatedBackground, setRelatedBackground] = useState([]);
   const [loadingRelated, setLoadingRelated] = useState(false);
   const [peopleTab, setPeopleTab] = useState('transition'); // 'transition' | 'related'
-  const hasConnectionFilters = (() => {
+  const [hopNudge, setHopNudge] = useState('');
+  const [showRelatedMatchCue, setShowRelatedMatchCue] = useState(false);
+  const hasConnectionFilters = useMemo(() => {
     if (!connectionFilters || typeof connectionFilters !== 'object') return false;
     const keys = ['past_companies', 'past_roles', 'tenure_options', 'colleges', 'departments', 'batch_options'];
     return keys.some((k) => Array.isArray(connectionFilters[k]) && connectionFilters[k].length > 0);
-  })();
+  }, [connectionFilters]);
+
+  const filteredEmployees = useMemo(() => {
+    const list = Array.isArray(employees) ? employees : [];
+    const q = String(roleFilter || '').trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((emp) => {
+      if (emp?.role_match) return true;
+      return (emp?.experience_history || []).some((exp) =>
+        String(exp?.role || '').toLowerCase().includes(q)
+      );
+    });
+  }, [employees, roleFilter]);
+
+  const filteredRelatedBackground = useMemo(() => {
+    const list = Array.isArray(relatedBackground) ? relatedBackground : [];
+    const q = String(roleFilter || '').trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((person) =>
+      (person?.experience_history || []).some((exp) =>
+        String(exp?.role || '').toLowerCase().includes(q)
+      )
+    );
+  }, [relatedBackground, roleFilter]);
 
   useEffect(() => {
-    if (employees.length === 0 && (relatedBackground || []).length > 0) setPeopleTab('related');
-    else if (employees.length > 0) setPeopleTab('transition');
-  }, [employees.length, relatedBackground]);
+    if (!hasConnectionFilters) {
+      setShowRelatedMatchCue(false);
+      return;
+    }
+    if (peopleTab === 'related') {
+      setShowRelatedMatchCue(false);
+      return;
+    }
+    const hasMatchedRelated = (relatedBackground || []).some((p) => p?.is_match);
+    setShowRelatedMatchCue(hasMatchedRelated);
+  }, [hasConnectionFilters, peopleTab, relatedBackground]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -71,7 +154,7 @@ const CompanyDetails = () => {
     })
       .then((data) => {
         const list = Array.isArray(data) ? data : [];
-        // Sort matched employees to the top
+        // Keep filter/role matched people at top for consistent scan order.
         list.sort((a, b) => {
           if ((a.is_match || false) !== (b.is_match || false)) return a.is_match ? -1 : 1;
           if ((a.role_match || false) !== (b.role_match || false)) return a.role_match ? -1 : 1;
@@ -95,24 +178,36 @@ const CompanyDetails = () => {
 
   useEffect(() => {
     if (!sourceOrgId || !destOrgId || !user) return;
-    const prefetched = location.state?.relatedBackground;
+    const sortRelated = (list) => {
+      list.sort((a, b) => {
+        if ((a.is_match || false) !== (b.is_match || false)) return a.is_match ? -1 : 1;
+        return String(a.employee_name || '').localeCompare(String(b.employee_name || ''));
+      });
+      return list;
+    };
+    const prefetched = prefetchedRelatedBackground;
     if (prefetched && typeof prefetched === 'object' && Array.isArray(prefetched.related)) {
-      setRelatedBackground(prefetched.related);
+      setRelatedBackground(sortRelated([...prefetched.related]));
       setLoadingRelated(false);
       return;
     }
     const startDate = startYear ? `${startYear}-01-01` : null;
     const endDate = endYear ? `${endYear}-12-31` : null;
     setLoadingRelated(true);
-    getRelatedBackground(sourceOrgId, destOrgId, { startDate, endDate })
+    getRelatedBackground(sourceOrgId, destOrgId, {
+      startDate,
+      endDate,
+      connectionFilters: hasConnectionFilters ? connectionFilters : undefined,
+    })
       .then((data) => {
-        setRelatedBackground(Array.isArray(data.related) ? data.related : []);
+        const list = Array.isArray(data.related) ? data.related : [];
+        setRelatedBackground(sortRelated(list));
       })
       .catch(() => setRelatedBackground([]))
       .finally(() => setLoadingRelated(false));
-  }, [sourceOrgId, destOrgId, startYear, endYear, user, location.state?.relatedBackground]);
+  }, [sourceOrgId, destOrgId, startYear, endYear, user, prefetchedRelatedBackground, connectionFilters, hasConnectionFilters]);
 
-  const totalEmployees = employees.length;
+  const totalEmployees = peopleTab === 'related' ? filteredRelatedBackground.length : filteredEmployees.length;
 
   const getMatchDetails = (person) => {
     const details = person?.filter_match_details;
@@ -164,6 +259,22 @@ const CompanyDetails = () => {
       'linkedin',
     ].filter(Boolean);
     return `https://www.google.com/search?q=${encodeURIComponent(queryParts.join(' '))}`;
+  };
+
+  const handleHopChange = (value) => {
+    if (peopleTab === 'related') {
+      setHopNudge('Hop works for Transition People. Switch to that tab to change it.');
+      return;
+    }
+    setHopNudge('');
+    setHop(value);
+  };
+
+  const handlePeopleTabChange = (tab) => {
+    if (tab === 'related') {
+      setShowRelatedMatchCue(false);
+    }
+    setPeopleTab(tab);
   };
 
   if (authLoading) {
@@ -286,13 +397,16 @@ const CompanyDetails = () => {
             </label>
             <select
               value={hop}
-              onChange={(e) => setHop(Number(e.target.value))}
+              onChange={(e) => handleHopChange(Number(e.target.value))}
               className="px-3 py-2 border border-[#E7E5E4] rounded-lg text-sm focus:outline-none focus:border-[#1C1917] bg-white cursor-pointer"
             >
               <option value={1}>1st transition</option>
               <option value={2}>2nd transition</option>
               <option value={3}>3rd transition</option>
             </select>
+            {hopNudge && (
+              <p className="text-[11px] text-amber-700 mt-1">{hopNudge}</p>
+            )}
           </div>
 
           <div>
@@ -334,46 +448,54 @@ const CompanyDetails = () => {
           <div>
             {/* Chrome-style tabs */}
             <div className="flex border-b border-[#E7E5E4] mb-6">
-              {employees.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setPeopleTab('transition')}
-                  className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${peopleTab === 'transition'
-                    ? 'border-[#3B82F6] text-[#3B82F6]'
-                    : 'border-transparent text-[#78716C] hover:text-[#1C1917]'
-                    }`}
-                >
-                  Transition People
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => handlePeopleTabChange('transition')}
+                className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${peopleTab === 'transition'
+                  ? 'border-[#3B82F6] text-[#3B82F6]'
+                  : 'border-transparent text-[#78716C] hover:text-[#1C1917]'
+                  }`}
+              >
+                Transition People
+              </button>
               {(relatedBackground || []).length > 0 && (
                 <button
                   type="button"
-                  onClick={() => setPeopleTab('related')}
-                  className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${peopleTab === 'related'
+                  onClick={() => handlePeopleTabChange('related')}
+                  className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px inline-flex items-center gap-2 ${peopleTab === 'related'
                     ? 'border-[#22C55E] text-[#22C55E]'
                     : 'border-transparent text-[#78716C] hover:text-[#1C1917]'
                     }`}
                 >
                   Related to Your Background
+                  {showRelatedMatchCue && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#22C55E]/15 text-[#15803D] text-[10px] font-semibold uppercase tracking-wide">
+                      New match
+                    </span>
+                  )}
                 </button>
               )}
             </div>
 
-            {peopleTab === 'transition' && employees.length > 0 && (
+            {peopleTab === 'transition' && (
               <section>
                 <p className="text-xs text-[#78716C] mb-4">
                   People who moved from the source company to this company.
                 </p>
-                <div className="space-y-4">
-                  {employees.map((emp) => (
-                    <div
-                      key={emp.employee_id}
-                      className={`bg-white border rounded-xl p-4 shadow-sm ${((hasConnectionFilters && emp.is_match && personHasFilterEvidence(emp)) || (!hasConnectionFilters && emp.role_match))
-                        ? 'border-blue-500 ring-1 ring-blue-500'
-                        : 'border-[#E7E5E4]'
-                        }`}
-                    >
+                {filteredEmployees.length === 0 ? (
+                  <div className="text-sm text-[#78716C] bg-white border border-[#E7E5E4] rounded-xl p-4">
+                    No transition people found for this hop.
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {filteredEmployees.map((emp) => (
+                      <div
+                        key={emp.employee_id}
+                        className={`bg-white border rounded-xl p-4 shadow-sm ${((hasConnectionFilters && emp.is_match) || (!hasConnectionFilters && emp.role_match))
+                          ? 'border-blue-500 ring-1 ring-blue-500'
+                          : 'border-[#E7E5E4]'
+                          }`}
+                      >
                       <div className="flex justify-between items-center mb-3">
                         <div>
                           <div className="flex items-center gap-2">
@@ -392,7 +514,7 @@ const CompanyDetails = () => {
                             >
                               <ExternalLink className="w-4 h-4" />
                             </a>
-                            {(hasConnectionFilters && emp.is_match && personHasFilterEvidence(emp)) && (
+                            {(hasConnectionFilters && emp.is_match) && (
                               <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider rounded-full">
                                 Filter Matched
                               </span>
@@ -538,9 +660,10 @@ const CompanyDetails = () => {
                           </table>
                         </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </section>
             )}
 
@@ -556,11 +679,16 @@ const CompanyDetails = () => {
                     <p className="text-xs text-[#78716C] mb-4">
                       People at this company who match your profile (same past company or college) but did not transition from the source company.
                     </p>
+                    {filteredRelatedBackground.length === 0 && (
+                      <div className="text-xs text-[#78716C] mb-4">
+                        No related people match this role filter.
+                      </div>
+                    )}
                     <div className="space-y-4">
-                      {(relatedBackground || []).map((person) => (
+                      {filteredRelatedBackground.map((person) => (
                         <div
                           key={person.employee_id}
-                          className={`bg-white border rounded-xl p-4 shadow-sm ${(person.is_match && personHasFilterEvidence(person)) ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/90' : 'border-[#E7E5E4]'}`}
+                          className={`bg-white border rounded-xl p-4 shadow-sm ${person.is_match ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/90' : 'border-[#E7E5E4]'}`}
                         >
                           <div className="flex justify-between items-center mb-3">
                           <div className="flex items-center gap-2">
@@ -579,7 +707,7 @@ const CompanyDetails = () => {
                             <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-medium uppercase tracking-wider rounded-full">
                               {person.connection_type === 'past_company_and_college' ? 'Company & College' : person.connection_type === 'past_company' ? 'Past company' : 'College'}
                             </span>
-                              {(person.is_match && personHasFilterEvidence(person)) && (
+                              {person.is_match && (
                                 <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-semibold uppercase tracking-wider rounded-full">
                                   Filter matched
                                 </span>
