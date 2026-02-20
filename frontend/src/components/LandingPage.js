@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, TrendingUp, Users, Briefcase, ArrowRight, Loader2, LogOut, User as UserIcon } from 'lucide-react';
+import { Search, TrendingUp, Users, Briefcase, ArrowRight, Loader2, LogOut, User as UserIcon, ShieldCheck, Lock, UserX } from 'lucide-react';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { searchOrganizations } from '../api/insights';
@@ -499,6 +499,115 @@ const LandingPage = () => {
           </div>
         </motion.div>
       </div>
+
+      {/* Product Preview */}
+      <section className="py-24 px-6 sm:px-12">
+        <motion.div
+          initial={{ opacity: 0, y: 30 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, margin: '-100px' }}
+          transition={{ duration: 0.7 }}
+          className="max-w-5xl mx-auto"
+        >
+          <div className="text-center mb-12">
+            <p className="text-sm uppercase tracking-[0.18em] text-[#F59E0B] mb-3">Preview</p>
+            <h2
+              className="text-3xl sm:text-4xl font-bold text-[#1C1917]"
+              style={{ fontFamily: "'Playfair Display', serif" }}
+            >
+              Your network, clearly mapped
+            </h2>
+          </div>
+
+          <div className="rounded-2xl border border-[#E7E5E4] bg-white overflow-hidden shadow-lg">
+            <div className="flex items-center gap-2 px-4 py-3 bg-[#F5F5F4] border-b border-[#E7E5E4]">
+              <div className="w-2.5 h-2.5 rounded-full bg-[#D6D3D1]" />
+              <div className="w-2.5 h-2.5 rounded-full bg-[#D6D3D1]" />
+              <div className="w-2.5 h-2.5 rounded-full bg-[#D6D3D1]" />
+              <div className="flex-1 mx-4 text-xs text-[#78716C] text-center">insights.app/dashboard</div>
+            </div>
+
+            <div className="p-6 grid md:grid-cols-2 gap-6">
+              <div className="rounded-xl border border-[#E7E5E4] p-5 bg-[#FAFAF9]">
+                <h4 className="text-sm font-semibold text-[#57534E] mb-4">Top Destination Companies</h4>
+                <div className="space-y-3">
+                  {[
+                    { name: 'Stripe', score: 94 },
+                    { name: 'Notion', score: 87 },
+                    { name: 'Figma', score: 79 },
+                    { name: 'Vercel', score: 72 },
+                  ].map((item, idx) => (
+                    <div key={item.name} className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-xs text-[#A8A29E] w-4">{idx + 1}</span>
+                        <span className="text-sm font-medium text-[#1C1917] truncate">{item.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <div className="w-20 h-1.5 bg-[#E7E5E4] rounded-full overflow-hidden">
+                          <div className="h-full bg-[#F59E0B] rounded-full" style={{ width: `${item.score}%` }} />
+                        </div>
+                        <span className="text-xs text-[#78716C] w-8 text-right">{item.score}%</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-[#E7E5E4] p-5 bg-[#FAFAF9]">
+                <h4 className="text-sm font-semibold text-[#57534E] mb-4">Career Transition Flow</h4>
+                <div className="space-y-3">
+                  {[
+                    { name: 'Product', value: 34 },
+                    { name: 'Engineering', value: 28 },
+                    { name: 'Design', value: 18 },
+                    { name: 'Operations', value: 12 },
+                    { name: 'Growth', value: 8 },
+                  ].map((item) => (
+                    <div key={item.name}>
+                      <div className="flex items-center justify-between text-xs text-[#57534E] mb-1">
+                        <span>{item.name}</span>
+                        <span>{item.value}%</span>
+                      </div>
+                      <div className="h-2 bg-[#E7E5E4] rounded-full overflow-hidden">
+                        <div className="h-full bg-[#1C1917] rounded-full" style={{ width: `${item.value * 2}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      </section>
+
+      {/* Bottom CTA */}
+      <section className="relative py-24 px-6 sm:px-12 overflow-hidden">
+        <div className="absolute inset-x-0 bottom-0 h-64 bg-gradient-to-t from-[#F59E0B]/10 to-transparent pointer-events-none" />
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, margin: '-100px' }}
+          transition={{ duration: 0.6 }}
+          className="relative max-w-3xl mx-auto text-center"
+        >
+          <h2
+            className="text-3xl sm:text-5xl font-bold text-[#1C1917] leading-tight mb-4"
+            style={{ fontFamily: "'Playfair Display', serif" }}
+          >
+            Know your advantage before you reach out
+          </h2>
+          <p className="text-lg text-[#78716C] mb-8">
+            Stop guessing. Start with network intelligence.
+          </p>
+          <button
+            type="button"
+            onClick={handleSearch}
+            className="h-14 px-10 bg-[#1C1917] text-[#FAFAF9] rounded-full text-base font-semibold hover:bg-[#292524] transition-all"
+          >
+            Get Started
+          </button>
+        </motion.div>
+      </section>
 
       {/* Footer */}
       <footer className="border-t border-[#E7E5E4] py-12">

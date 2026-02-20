@@ -314,6 +314,34 @@ const Dashboard = () => {
     } catch (_) { }
   };
 
+  const getTopCompanyNamesForPerson = (person) => {
+    const seen = new Set();
+    const names = [];
+    const path = Array.isArray(person?.path) ? person.path : [];
+    for (const company of path) {
+      const value = String(company || '').trim();
+      const key = value.toLowerCase();
+      if (!value || seen.has(key)) continue;
+      seen.add(key);
+      names.push(value);
+      if (names.length >= 2) return names;
+    }
+    const currentCompany = String(person?.current_company || '').trim();
+    if (currentCompany && !seen.has(currentCompany.toLowerCase())) {
+      names.push(currentCompany);
+    }
+    return names.slice(0, 2);
+  };
+
+  const buildLinkedInSearchUrl = (name, companyNames = []) => {
+    const queryParts = [
+      String(name || '').trim(),
+      ...companyNames.slice(0, 2).map((c) => String(c || '').trim()).filter(Boolean),
+      'linkedin',
+    ].filter(Boolean);
+    return `https://www.google.com/search?q=${encodeURIComponent(queryParts.join(' '))}`;
+  };
+
   useEffect(() => {
     try {
       sessionStorage.setItem(
@@ -1964,9 +1992,20 @@ const Dashboard = () => {
                     transition={{ delay: index * 0.05, duration: 0.4 }}
                     className={`bg-white border rounded-xl p-6 hover:shadow-md transition-all shadow-sm ${(appliedConnectionFilters && person.is_match) ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100' : 'border-[#E7E5E4]'}`}
                   >
-                    <h3 className="text-lg font-bold text-[#1C1917] mb-1" style={{ fontFamily: "'Playfair Display', serif" }}>
-                      {person.name}
-                    </h3>
+                    <div className="flex items-center gap-2 mb-1">
+                      <h3 className="text-lg font-bold text-[#1C1917]" style={{ fontFamily: "'Playfair Display', serif" }}>
+                        {person.name}
+                      </h3>
+                      <a
+                        href={buildLinkedInSearchUrl(person.name, getTopCompanyNamesForPerson(person))}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={`Search ${person.name} on LinkedIn`}
+                        className="inline-flex items-center text-[#2563EB] hover:text-[#1D4ED8]"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                      </a>
+                    </div>
                     <p className="text-sm text-[#78716C] mb-4">
                       Exited {person.exited_year}
                     </p>
