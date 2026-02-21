@@ -47,6 +47,35 @@ export async function searchOrganizations(orgName) {
   return res.json();
 }
 
+export async function searchSchools(schoolName) {
+  const trimmed = (schoolName || '').trim();
+  if (!trimmed) {
+    return [];
+  }
+  const url = API_BASE
+    ? `${API_BASE}/schools?school_name=${encodeURIComponent(trimmed)}`
+    : `/schools?school_name=${encodeURIComponent(trimmed)}`;
+  let res;
+  try {
+    res = await fetch(url, { headers: getAuthHeaders() });
+  } catch (netErr) {
+    const msg =
+      netErr.message && netErr.message.includes('Failed to fetch')
+        ? 'Backend unavailable. Start the Flask app (e.g. python app.py) on port 5001.'
+        : netErr.message || 'Network error';
+    throw new Error(msg);
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    const message =
+      res.status === 500
+        ? 'Server error. Check that the database is set up and the Flask app is running.'
+        : err.error || `School search failed: ${res.status}`;
+    throw new Error(message);
+  }
+  return res.json();
+}
+
 /**
  * Build connection_filters query param (JSON) for org-transitions and alumni.
  * All arrays: empty = no filter (All / Any). Multiple = OR within category, AND across.

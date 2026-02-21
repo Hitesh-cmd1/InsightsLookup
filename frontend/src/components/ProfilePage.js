@@ -4,20 +4,22 @@ import { Upload, X, Plus, Info, TrendingUp, User as UserIcon, LogOut, FileText, 
 import { toast } from 'sonner';
 
 import { useAuth } from '../context/AuthContext';
-import { getProfile, updateProfile, uploadResume, deleteResume, downloadResume } from '../api/insights';
+import { getProfile, updateProfile, uploadResume, deleteResume, downloadResume, searchOrganizations, searchSchools } from '../api/insights';
 
 const emptyExperience = () => ({
   company: '',
   role: '',
   start_date: '',
-  end_date: ''
+  end_date: '',
+  currently_working: false,
 });
 
 const emptyEducation = () => ({
   college: '',
   degree: '',
   start_date: '',
-  end_date: ''
+  end_date: '',
+  currently_studying: false,
 });
 
 const ProfilePage = () => {
@@ -36,6 +38,12 @@ const ProfilePage = () => {
   const [skillInput, setSkillInput] = useState('');
   const [resumeFileName, setResumeFileName] = useState(null);
   const [removingResume, setRemovingResume] = useState(false);
+  const [companySuggestions, setCompanySuggestions] = useState([]);
+  const [companySuggestionsLoading, setCompanySuggestionsLoading] = useState(false);
+  const [activeCompanyIndex, setActiveCompanyIndex] = useState(null);
+  const [collegeSuggestions, setCollegeSuggestions] = useState([]);
+  const [collegeSuggestionsLoading, setCollegeSuggestionsLoading] = useState(false);
+  const [activeCollegeIndex, setActiveCollegeIndex] = useState(null);
 
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
 
@@ -50,7 +58,8 @@ const ProfilePage = () => {
             company: exp.company || '',
             role: exp.role || '',
             start_date: exp.start_date || '',
-            end_date: exp.end_date || ''
+            end_date: exp.end_date || '',
+            currently_working: !exp.end_date,
           }))
         : [emptyExperience()]
     );
@@ -61,7 +70,8 @@ const ProfilePage = () => {
             college: edu.college || '',
             degree: edu.degree || '',
             start_date: edu.start_date || '',
-            end_date: edu.end_date || ''
+            end_date: edu.end_date || '',
+            currently_studying: !edu.end_date,
           }))
         : [emptyEducation()]
     );
@@ -91,6 +101,50 @@ const ProfilePage = () => {
       })
       .finally(() => setLoading(false));
   }, [authLoading, user, openLogin, navigate, hydrateFromProfile]);
+
+  useEffect(() => {
+    if (activeCompanyIndex == null) {
+      setCompanySuggestions([]);
+      setCompanySuggestionsLoading(false);
+      return;
+    }
+    const q = (experiences[activeCompanyIndex]?.company || '').trim();
+    if (q.length < 2) {
+      setCompanySuggestions([]);
+      setCompanySuggestionsLoading(false);
+      return;
+    }
+    const t = setTimeout(() => {
+      setCompanySuggestionsLoading(true);
+      searchOrganizations(q)
+        .then((list) => setCompanySuggestions(Array.isArray(list) ? list : []))
+        .catch(() => setCompanySuggestions([]))
+        .finally(() => setCompanySuggestionsLoading(false));
+    }, 220);
+    return () => clearTimeout(t);
+  }, [activeCompanyIndex, experiences]);
+
+  useEffect(() => {
+    if (activeCollegeIndex == null) {
+      setCollegeSuggestions([]);
+      setCollegeSuggestionsLoading(false);
+      return;
+    }
+    const q = (educations[activeCollegeIndex]?.college || '').trim();
+    if (q.length < 2) {
+      setCollegeSuggestions([]);
+      setCollegeSuggestionsLoading(false);
+      return;
+    }
+    const t = setTimeout(() => {
+      setCollegeSuggestionsLoading(true);
+      searchSchools(q)
+        .then((list) => setCollegeSuggestions(Array.isArray(list) ? list : []))
+        .catch(() => setCollegeSuggestions([]))
+        .finally(() => setCollegeSuggestionsLoading(false));
+    }, 220);
+    return () => clearTimeout(t);
+  }, [activeCollegeIndex, educations]);
 
   const handleAddSkill = () => {
     const value = (skillInput || '').trim();
@@ -123,13 +177,47 @@ const ProfilePage = () => {
 
   const handleExperienceChange = (index, field, value) => {
     setExperiences((prev) =>
-      prev.map((exp, i) => (i === index ? { ...exp, [field]: value } : exp))
+      prev.map((exp, i) => {
+        if (i !== index) return exp;
+        if (field === 'currently_working') {
+          return {
+            ...exp,
+            currently_working: !!value,
+            end_date: value ? '' : exp.end_date,
+          };
+        }
+        if (field === 'end_date') {
+          return {
+            ...exp,
+            end_date: value,
+            currently_working: value ? false : exp.currently_working,
+          };
+        }
+        return { ...exp, [field]: value };
+      })
     );
   };
 
   const handleEducationChange = (index, field, value) => {
     setEducations((prev) =>
-      prev.map((edu, i) => (i === index ? { ...edu, [field]: value } : edu))
+      prev.map((edu, i) => {
+        if (i !== index) return edu;
+        if (field === 'currently_studying') {
+          return {
+            ...edu,
+            currently_studying: !!value,
+            end_date: value ? '' : edu.end_date,
+          };
+        }
+        if (field === 'end_date') {
+          return {
+            ...edu,
+            end_date: value,
+            currently_studying: value ? false : edu.currently_studying,
+          };
+        }
+        return { ...edu, [field]: value };
+      })
     );
   };
 
@@ -139,6 +227,11 @@ const ProfilePage = () => {
 
   const handleRemoveExperience = (index) => {
     if (experiences.length === 1) return;
+    if (activeCompanyIndex === index) {
+      setActiveCompanyIndex(null);
+    } else if (activeCompanyIndex != null && activeCompanyIndex > index) {
+      setActiveCompanyIndex(activeCompanyIndex - 1);
+    }
     setExperiences(experiences.filter((_, i) => i !== index));
   };
 
@@ -148,6 +241,11 @@ const ProfilePage = () => {
 
   const handleRemoveEducation = (index) => {
     if (educations.length === 1) return;
+    if (activeCollegeIndex === index) {
+      setActiveCollegeIndex(null);
+    } else if (activeCollegeIndex != null && activeCollegeIndex > index) {
+      setActiveCollegeIndex(activeCollegeIndex - 1);
+    }
     setEducations(educations.filter((_, i) => i !== index));
   };
 
@@ -162,12 +260,22 @@ const ProfilePage = () => {
     try {
       const payload = {
         name: name || user.name || '',
-        work_experiences: experiences.filter(
-          (exp) => exp.company || exp.role || exp.start_date || exp.end_date
-        ),
-        educations: educations.filter(
-          (edu) => edu.college || edu.degree || edu.start_date || edu.end_date
-        ),
+        work_experiences: experiences
+          .map((exp) => ({
+            company: exp.company || '',
+            role: exp.role || '',
+            start_date: exp.start_date || '',
+            end_date: exp.currently_working ? '' : (exp.end_date || ''),
+          }))
+          .filter((exp) => exp.company || exp.role || exp.start_date || exp.end_date),
+        educations: educations
+          .map((edu) => ({
+            college: edu.college || '',
+            degree: edu.degree || '',
+            start_date: edu.start_date || '',
+            end_date: edu.currently_studying ? '' : (edu.end_date || ''),
+          }))
+          .filter((edu) => edu.college || edu.degree || edu.start_date || edu.end_date),
         skills
       };
       const updated = await updateProfile(payload);
@@ -472,15 +580,40 @@ const ProfilePage = () => {
                       <label className="block text-xs font-medium text-[#1C1917]">
                         Company Name
                       </label>
-                      <input
-                        type="text"
-                        value={exp.company}
-                        onChange={(e) =>
-                          handleExperienceChange(index, 'company', e.target.value)
-                        }
-                        placeholder="e.g. Google"
-                        className="w-full h-10 px-3 rounded-lg border border-[#E7E5E4] bg-white text-sm text-[#1C1917] focus:outline-none focus:border-[#1C1917] focus:ring-0"
-                      />
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={exp.company}
+                          onChange={(e) =>
+                            handleExperienceChange(index, 'company', e.target.value)
+                          }
+                          onFocus={() => setActiveCompanyIndex(index)}
+                          onBlur={() => setTimeout(() => setActiveCompanyIndex((current) => (current === index ? null : current)), 160)}
+                          placeholder="e.g. Google"
+                          className="w-full h-10 px-3 rounded-lg border border-[#E7E5E4] bg-white text-sm text-[#1C1917] focus:outline-none focus:border-[#1C1917] focus:ring-0"
+                        />
+                        {activeCompanyIndex === index && (companySuggestionsLoading || companySuggestions.length > 0) && (
+                          <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-[#E7E5E4] rounded-xl shadow-lg z-30 max-h-44 overflow-auto">
+                            {companySuggestionsLoading && (
+                              <div className="px-3 py-2 text-xs text-[#78716C]">Searching...</div>
+                            )}
+                            {!companySuggestionsLoading && companySuggestions.map((org) => (
+                              <button
+                                key={org.id || org.name}
+                                type="button"
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  handleExperienceChange(index, 'company', org.name || '');
+                                  setActiveCompanyIndex(null);
+                                }}
+                                className="w-full text-left px-3 py-2 text-sm text-[#1C1917] hover:bg-[#F5F5F4]"
+                              >
+                                {org.name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
                     <div className="space-y-2">
                       <label className="block text-xs font-medium text-[#1C1917]">
@@ -508,6 +641,17 @@ const ProfilePage = () => {
                         }
                         className="w-full h-10 px-3 rounded-lg border border-[#E7E5E4] bg-white text-sm text-[#1C1917] focus:outline-none focus:border-[#1C1917] focus:ring-0"
                       />
+                      <label className="inline-flex items-center gap-2 text-xs text-[#57534E] pt-1">
+                        <input
+                          type="checkbox"
+                          checked={!!exp.currently_working}
+                          onChange={(e) =>
+                            handleExperienceChange(index, 'currently_working', e.target.checked)
+                          }
+                          className="rounded border-[#D6D3D1] text-[#1C1917] focus:ring-0"
+                        />
+                        Currently working
+                      </label>
                     </div>
                     <div className="space-y-2">
                       <label className="block text-xs font-medium text-[#1C1917]">
@@ -519,7 +663,11 @@ const ProfilePage = () => {
                         onChange={(e) =>
                           handleExperienceChange(index, 'end_date', e.target.value)
                         }
-                        className="w-full h-10 px-3 rounded-lg border border-[#E7E5E4] bg-white text-sm text-[#1C1917] focus:outline-none focus:border-[#1C1917] focus:ring-0"
+                        disabled={!!exp.currently_working}
+                        className={`w-full h-10 px-3 rounded-lg border text-sm focus:outline-none focus:ring-0 ${exp.currently_working
+                          ? 'border-[#D6D3D1] bg-[#F5F5F4] text-[#A8A29E] opacity-70 blur-[1px] cursor-not-allowed'
+                          : 'border-[#E7E5E4] bg-white text-[#1C1917] focus:border-[#1C1917]'
+                          }`}
                       />
                     </div>
                   </div>
@@ -569,15 +717,40 @@ const ProfilePage = () => {
                       <label className="block text-xs font-medium text-[#1C1917]">
                         College Name
                       </label>
-                      <input
-                        type="text"
-                        value={edu.college}
-                        onChange={(e) =>
-                          handleEducationChange(index, 'college', e.target.value)
-                        }
-                        placeholder="e.g. Stanford University"
-                        className="w-full h-10 px-3 rounded-lg border border-[#E7E5E4] bg-white text-sm text-[#1C1917] focus:outline-none focus:border-[#1C1917] focus:ring-0"
-                      />
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={edu.college}
+                          onChange={(e) =>
+                            handleEducationChange(index, 'college', e.target.value)
+                          }
+                          onFocus={() => setActiveCollegeIndex(index)}
+                          onBlur={() => setTimeout(() => setActiveCollegeIndex((current) => (current === index ? null : current)), 160)}
+                          placeholder="e.g. Stanford University"
+                          className="w-full h-10 px-3 rounded-lg border border-[#E7E5E4] bg-white text-sm text-[#1C1917] focus:outline-none focus:border-[#1C1917] focus:ring-0"
+                        />
+                        {activeCollegeIndex === index && (collegeSuggestionsLoading || collegeSuggestions.length > 0) && (
+                          <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-[#E7E5E4] rounded-xl shadow-lg z-30 max-h-44 overflow-auto">
+                            {collegeSuggestionsLoading && (
+                              <div className="px-3 py-2 text-xs text-[#78716C]">Searching...</div>
+                            )}
+                            {!collegeSuggestionsLoading && collegeSuggestions.map((school) => (
+                              <button
+                                key={school.id || school.name}
+                                type="button"
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  handleEducationChange(index, 'college', school.name || '');
+                                  setActiveCollegeIndex(null);
+                                }}
+                                className="w-full text-left px-3 py-2 text-sm text-[#1C1917] hover:bg-[#F5F5F4]"
+                              >
+                                {school.name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
                     <div className="space-y-2">
                       <label className="block text-xs font-medium text-[#1C1917]">
@@ -605,6 +778,17 @@ const ProfilePage = () => {
                         }
                         className="w-full h-10 px-3 rounded-lg border border-[#E7E5E4] bg-white text-sm text-[#1C1917] focus:outline-none focus:border-[#1C1917] focus:ring-0"
                       />
+                      <label className="inline-flex items-center gap-2 text-xs text-[#57534E] pt-1">
+                        <input
+                          type="checkbox"
+                          checked={!!edu.currently_studying}
+                          onChange={(e) =>
+                            handleEducationChange(index, 'currently_studying', e.target.checked)
+                          }
+                          className="rounded border-[#D6D3D1] text-[#1C1917] focus:ring-0"
+                        />
+                        Currently studying
+                      </label>
                     </div>
                     <div className="space-y-2">
                       <label className="block text-xs font-medium text-[#1C1917]">
@@ -616,7 +800,11 @@ const ProfilePage = () => {
                         onChange={(e) =>
                           handleEducationChange(index, 'end_date', e.target.value)
                         }
-                        className="w-full h-10 px-3 rounded-lg border border-[#E7E5E4] bg-white text-sm text-[#1C1917] focus:outline-none focus:border-[#1C1917] focus:ring-0"
+                        disabled={!!edu.currently_studying}
+                        className={`w-full h-10 px-3 rounded-lg border text-sm focus:outline-none focus:ring-0 ${edu.currently_studying
+                          ? 'border-[#D6D3D1] bg-[#F5F5F4] text-[#A8A29E] opacity-70 blur-[1px] cursor-not-allowed'
+                          : 'border-[#E7E5E4] bg-white text-[#1C1917] focus:border-[#1C1917]'
+                          }`}
                       />
                     </div>
                   </div>

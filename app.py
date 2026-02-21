@@ -471,15 +471,20 @@ def _alumni_pass_connection_filters(
         if not user_start and not user_end:
             return True
         if option == "with-me":
-            if not alumni_start or not alumni_end:
-                return False
-            return (alumni_start < (user_end or date.max)) and ((alumni_end or date.min) > (user_start or date.min))
+            # Treat missing end dates as "ongoing" for overlap checks.
+            a_start = alumni_start or date.min
+            a_end = alumni_end or date.max
+            u_start = user_start or date.min
+            u_end = user_end or date.max
+            return a_start <= u_end and a_end >= u_start
         if option == "near-me":
-            if not alumni_end:
+            # Prefer alumni end date; if ongoing, use start date for proximity.
+            anchor = alumni_end or alumni_start
+            if not anchor:
                 return False
             low = (user_start or date.min) - timedelta(days=365 * 2) if user_start else date.min
             high = (user_end or date.max) + timedelta(days=365 * 2) if user_end else date.max
-            return low <= alumni_end <= high
+            return low <= anchor <= high
         return False
 
     def batch_matches(alumni_start_year, alumni_end_year, alumni_school_name, alumni_school_id):
@@ -492,6 +497,8 @@ def _alumni_pass_connection_filters(
             u_end = u["end_year"]
             if "exact" in batch_opts and alumni_start_year == u_start and alumni_end_year == u_end:
                 return True
+            if "exact" in batch_opts and u_start is not None and alumni_start_year == u_start and (u_end is None or alumni_end_year is None):
+                return True
             if "close" in batch_opts and u_start is not None and alumni_start_year is not None:
                 if abs(alumni_start_year - u_start) <= 4:
                     return True
@@ -499,6 +506,8 @@ def _alumni_pass_connection_filters(
             u_start = u["start_year"]
             u_end = u["end_year"]
             if "exact" in batch_opts and alumni_start_year == u_start and alumni_end_year == u_end:
+                return True
+            if "exact" in batch_opts and u_start is not None and alumni_start_year == u_start and (u_end is None or alumni_end_year is None):
                 return True
             if "close" in batch_opts and u_start is not None and alumni_start_year is not None:
                 if abs(alumni_start_year - u_start) <= 4:
@@ -875,7 +884,71 @@ def search_organizations():
                     "alumni_count": alumni_count_by_org.get(org.id, 0),
                 }
                 for org in matches
-                if alumni_count_by_org.get(org.id, 0) > 15
+                if alumni_count_by_org.get(org.id, 0) > 5
+            ]
+        )
+
+
+@app.get("/schools")
+def search_schools():
+    """
+    GET /schools?school_name=...
+
+    Query params:
+    - school_name (str, required): partial name to search for (case-insensitive).
+
+    Response:
+    [
+      {"id": 1, "name": "Stanford University", "education_count": 120},
+      ...
+    ]
+
+    Only returns schools where education_count > 2.
+    """
+    school_name = request.args.get("school_name", type=str)
+    if not school_name:
+        return (
+            jsonify(
+                {
+                    "error": "Missing required query parameter 'school_name'",
+                }
+            ),
+            400,
+        )
+
+    for db in get_db():
+        matches = (
+            db.query(School)
+            .filter(School.name.ilike(f"%{school_name.strip()}%"))
+            .order_by(School.name.asc())
+            .limit(50)
+            .all()
+        )
+
+        if not matches:
+            return jsonify([])
+
+        school_ids = [s.id for s in matches]
+        count_rows = (
+            db.query(
+                Education.school_id,
+                func.count(func.distinct(Education.employee_id)),
+            )
+            .filter(Education.school_id.in_(school_ids))
+            .group_by(Education.school_id)
+            .all()
+        )
+        education_count_by_school = {school_id: count for school_id, count in count_rows}
+
+        return jsonify(
+            [
+                {
+                    "id": s.id,
+                    "name": s.name,
+                    "education_count": education_count_by_school.get(s.id, 0),
+                }
+                for s in matches
+                if education_count_by_school.get(s.id, 0) > 2
             ]
         )
 
@@ -2065,7 +2138,10 @@ def related_background():
 def _fuzzy_match_name(session, model, name_value, threshold=85, cache=None):
     """
     Fuzzy match a name against a reference model (Organization or School).
-    If cache is provided (dict {model: (names, ids)}), use it.
+    Match order:
+    1) Names with count > 2 (preferred set)
+    2) Remaining names
+    If no match in either set, return None.
     """
     if not name_value:
         return None
@@ -2073,27 +2149,87 @@ def _fuzzy_match_name(session, model, name_value, threshold=85, cache=None):
     if not name_value:
         return None
 
-    # Exact match first (fast)
-    exact = session.query(model.id).filter(func.lower(model.name) == name_value.lower()).first()
-    if exact:
-        return exact.id
-
-    # Fuzzy match
     if cache is not None and model in cache:
-        names, ids = cache[model]
+        bucket = cache[model]
+        if isinstance(bucket, tuple) and len(bucket) == 2:
+            names, ids = bucket
+            bucket = {
+                "preferred_names": [],
+                "preferred_ids": [],
+                "fallback_names": list(names or []),
+                "fallback_ids": list(ids or []),
+            }
+            cache[model] = bucket
     else:
-        all_refs = session.query(model.id, model.name).all()
-        names = [r.name for r in all_refs]
-        ids = [r.id for r in all_refs]
+        all_refs = (
+            session.query(model.id, model.name)
+            .order_by(model.name.asc())
+            .all()
+        )
+        all_names = [r.name for r in all_refs]
+        all_ids = [r.id for r in all_refs]
+
+        popular_ids = set()
+        if model == Organization:
+            popular_rows = (
+                session.query(Experience.organization_id)
+                .filter(Experience.organization_id.isnot(None))
+                .group_by(Experience.organization_id)
+                .having(func.count(func.distinct(Experience.employee_id)) > 2)
+                .all()
+            )
+            popular_ids = {row[0] for row in popular_rows if row[0] is not None}
+        elif model == School:
+            popular_rows = (
+                session.query(Education.school_id)
+                .filter(Education.school_id.isnot(None))
+                .group_by(Education.school_id)
+                .having(func.count(func.distinct(Education.employee_id)) > 2)
+                .all()
+            )
+            popular_ids = {row[0] for row in popular_rows if row[0] is not None}
+
+        preferred_names = []
+        preferred_ids = []
+        fallback_names = []
+        fallback_ids = []
+        for rid, rname in zip(all_ids, all_names):
+            if rid in popular_ids:
+                preferred_ids.append(rid)
+                preferred_names.append(rname)
+            else:
+                fallback_ids.append(rid)
+                fallback_names.append(rname)
+
+        bucket = {
+            "preferred_names": preferred_names,
+            "preferred_ids": preferred_ids,
+            "fallback_names": fallback_names,
+            "fallback_ids": fallback_ids,
+        }
         if cache is not None:
-            cache[model] = (names, ids)
+            cache[model] = bucket
 
-    if not names:
-        return None
+    # Phase 1: exact/fuzzy in preferred set (count > 2).
+    if bucket["preferred_names"]:
+        exact_pref = session.query(model.id).filter(
+            model.id.in_(bucket["preferred_ids"]),
+            func.lower(model.name) == name_value.lower(),
+        ).first()
+        if exact_pref:
+            return exact_pref.id
+        match_pref = process.extractOne(name_value, bucket["preferred_names"], scorer=fuzz.WRatio)
+        if match_pref and match_pref[1] >= threshold:
+            return bucket["preferred_ids"][match_pref[2]]
 
-    match = process.extractOne(name_value, names, scorer=fuzz.WRatio)
-    if match and match[1] >= threshold:
-        return ids[match[2]]
+    # Phase 2: exact/fuzzy in the rest of the list.
+    exact_fallback = session.query(model.id).filter(func.lower(model.name) == name_value.lower()).first()
+    if exact_fallback:
+        return exact_fallback.id
+    if bucket["fallback_names"]:
+        match_fallback = process.extractOne(name_value, bucket["fallback_names"], scorer=fuzz.WRatio)
+        if match_fallback and match_fallback[1] >= threshold:
+            return bucket["fallback_ids"][match_fallback[2]]
     return None
 
 

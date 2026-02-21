@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Loader2, ArrowLeft, ExternalLink } from 'lucide-react';
+import { Loader2, ExternalLink } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { getEmployeeTransitions, getRelatedBackground } from '../api/insights';
 import { useAuth } from '../context/AuthContext';
@@ -305,12 +305,6 @@ const CompanyDetails = () => {
 
             <div className="h-8 w-px bg-[#E7E5E4]" />
             <div className="flex items-center gap-3">
-              <button
-                onClick={() => navigate(-1)}
-                className="p-2 rounded-lg border border-[#E7E5E4] hover:bg-[#F5F5F4] mr-2"
-              >
-                <ArrowLeft className="w-4 h-4 text-[#1C1917]" />
-              </button>
               <div>
                 <h1
                   className="text-xl font-bold text-[#1C1917]"

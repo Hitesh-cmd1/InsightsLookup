@@ -286,6 +286,8 @@ const Dashboard = () => {
   const [selectedBatchOptions, setSelectedBatchOptions] = useState(savedConnectionFilters.selectedBatchOptions);
   // Applied filters sent to API (set when user clicks Done in modal)
   const [appliedConnectionFilters, setAppliedConnectionFilters] = useState(savedConnectionFilters.appliedConnectionFilters);
+  const [showNoMatchHint, setShowNoMatchHint] = useState(false);
+  const [connectionFilterApplyTick, setConnectionFilterApplyTick] = useState(0);
   const lastFetchKeyRef = useRef(null);
   const transitionsRequestSeqRef = useRef(0);
   const firstTransitionsRef = useRef(null);
@@ -460,7 +462,13 @@ const Dashboard = () => {
   };
 
   const applyFiltersAndClose = () => {
-    setAppliedConnectionFilters(buildConnectionFilters());
+    const nextFilters = buildConnectionFilters();
+    setAppliedConnectionFilters(nextFilters);
+    if (nextFilters) {
+      setConnectionFilterApplyTick((n) => n + 1);
+    } else {
+      setShowNoMatchHint(false);
+    }
     setIsFilterOpen(false);
   };
 
@@ -768,6 +776,26 @@ const Dashboard = () => {
   const filteredCompaniesFirst = prioritizeFilterMatches(filterByRoleMatch(applyCommonFilters(companiesFirst ?? [])));
   const filteredCompaniesSecond = prioritizeFilterMatches(filterByRoleMatch(applyCommonFilters(companiesSecond ?? [])));
   const filteredCompaniesThird = prioritizeFilterMatches(filterByRoleMatch(applyCommonFilters(companiesThird ?? [])));
+  const hasCompanyFiltersActive = Boolean(
+    String(searchName || '').trim() ||
+    selectedTransition !== 'all' ||
+    selectedYear !== 'all' ||
+    String(minTransitions || '').trim() ||
+    String(maxTransitions || '').trim() ||
+    String(contextRole || '').trim() ||
+    isConnectionFilterActive
+  );
+  const hasAlumniFiltersActive = Boolean(String(searchName || '').trim() || isConnectionFilterActive);
+  const companyNoMatchMessage = isConnectionFilterActive
+    ? 'No results matched your current connection filters. Try broadening company, role, tenure, college, or batch filters.'
+    : hasCompanyFiltersActive
+      ? 'Nothing matched your current filters. Try using new filters to broaden your results.'
+      : 'No company pathways found for this period.';
+  const alumniNoMatchMessage = isConnectionFilterActive
+    ? 'No alumni matched your current connection filters. Try broadening company, role, tenure, college, or batch filters.'
+    : hasAlumniFiltersActive
+      ? 'Nothing matched your current filters. Try using new filters to find alumni.'
+      : 'No alumni data found for this period.';
   const appliedFiltersCount = useMemo(() => {
     if (!appliedConnectionFilters || typeof appliedConnectionFilters !== 'object') return 0;
     const keys = ['past_companies', 'past_roles', 'tenure_options', 'colleges', 'departments', 'batch_options'];
@@ -792,6 +820,35 @@ const Dashboard = () => {
     });
     return visible.size;
   }, [filteredCompaniesFirst, filteredCompaniesSecond, filteredCompaniesThird]);
+
+  useEffect(() => {
+    if (!connectionFilterApplyTick) return;
+    if (loading) return;
+    if (!isConnectionFilterActive) return;
+    if (matchedCompaniesCount > 0) return;
+    setShowNoMatchHint(true);
+    const timer = setTimeout(() => setShowNoMatchHint(false), 4000);
+    return () => clearTimeout(timer);
+  }, [connectionFilterApplyTick, loading, isConnectionFilterActive, matchedCompaniesCount]);
+
+  useEffect(() => {
+    if (!showNoMatchHint) return;
+    const dismiss = () => setShowNoMatchHint(false);
+    const opts = { passive: true };
+    window.addEventListener('click', dismiss, opts);
+    window.addEventListener('keydown', dismiss);
+    window.addEventListener('input', dismiss, opts);
+    window.addEventListener('scroll', dismiss, opts);
+    window.addEventListener('touchstart', dismiss, opts);
+    return () => {
+      window.removeEventListener('click', dismiss);
+      window.removeEventListener('keydown', dismiss);
+      window.removeEventListener('input', dismiss);
+      window.removeEventListener('scroll', dismiss);
+      window.removeEventListener('touchstart', dismiss);
+    };
+  }, [showNoMatchHint]);
+
   const scrollToTransitions = (which) => {
     const ref = which === 1 ? firstTransitionsRef : which === 2 ? secondTransitionsRef : thirdTransitionsRef;
     ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1435,6 +1492,7 @@ const Dashboard = () => {
                 onClick={() => {
                   incrementActivationCounter('clear_filters_clicks');
                   clearAllFilters();
+                  setShowNoMatchHint(false);
                 }}
                 className="ml-auto text-sm text-[#3B82F6] hover:underline"
                 data-testid="clear-all-button"
@@ -1447,6 +1505,13 @@ const Dashboard = () => {
                   : `Showing ${totalVisibleCompaniesCount} companies`}
               </span>
             </div>
+            {showNoMatchHint && (
+              <div className="mt-2">
+                <p className="inline-flex items-center rounded-full border border-[#FDE68A] bg-[#FEFCE8] px-3 py-1 text-xs text-[#92400E]">
+                  Nothing matched your current filters. Try applying new filters ...
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1657,7 +1722,7 @@ const Dashboard = () => {
                         <div className="flex flex-wrap gap-2">
                           {[
                             { id: 'with-me', label: 'Worked with me', title: 'Any person with matching or overlapping tenure' },
-                            { id: 'near-me', label: 'Near my time', title: 'People who exited up to 2 years before your start or up to 2 years after your end date' },
+                            { id: 'near-me', label: 'Near my time', title: 'People whose stint is within 2 years of your timeframe (supports current roles with no end date)' },
                             { id: 'any-time', label: 'Anytime', title: 'No tenure restriction' },
                           ].map(({ id, label, title }) => {
                             const selected = (selectedTenureOptions ?? []).includes(id);
@@ -1681,7 +1746,7 @@ const Dashboard = () => {
                           })}
                         </div>
                         <p className="text-xs text-[#78716C] mt-1.5">
-                          Worked with me: overlapping tenure. Near my time: exited within 2 years of your stint. Anytime: no restriction.
+                          Worked with me: overlapping tenure. Near my time: within 2 years of your stint window. Anytime: no restriction.
                         </p>
                       </div>
                     </div>
@@ -1831,6 +1896,7 @@ const Dashboard = () => {
                         setSelectedDepartments([]);
                         setSelectedBatchOptions([]);
                         setAppliedConnectionFilters(null);
+                        setShowNoMatchHint(false);
                         lastFetchKeyRef.current = null;
                         setIsFilterOpen(false);
                       }}
@@ -1881,169 +1947,174 @@ const Dashboard = () => {
 
             {!loading && !error && (
               <>
-                {/* Company Cards Grid */}
-                <motion.div
-                  className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ duration: 0.5 }}
-                >
-                  {filteredCompaniesFirst.map((company, index) => (
-                    <motion.div
-                      key={company.name ? `${company.name}-${index}` : index}
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: index * 0.05, duration: 0.4 }}
-                      whileHover={isSelectionMode ? undefined : { y: -4 }}
-                      className={`relative overflow-hidden bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && (company.filterMatchCount || 0) > 0))
-                        ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100'
-                        : 'border-[#E7E5E4]'
-                        } rounded-xl p-6 hover:shadow-md transition-all ${isSelectionMode ? 'cursor-default' : 'cursor-pointer'} ${(isTourTarget('company-card') && index === 0) ? 'relative z-[60] ring-4 ring-[#F59E0B]/50' : ''} ${isCardSelected(1, company, index) ? 'shadow-[inset_0_0_0_2px_rgba(59,130,246,0.45)]' : ''}`}
-                      data-tour={index === 0 ? 'company-card' : undefined}
-                      data-testid={`company-card-${company.rank}`}
-                      onClick={() => {
-                        if (isSelectionMode) return;
-                        incrementActivationCounter('company_card_clicks', false);
-                        incrementActivationCounter('company_cards_opened');
-                        trackCoreFeatureUsed('company_card_opened', { hop: 1, company_name: company.name, dest_org_id: company.organizationId });
-                        openCompanyDetailsInNewTab(company, 1);
-                      }}
-                    >
-                      <div className={`absolute left-0 top-0 h-full ${isCardSelected(1, company, index) ? 'w-2 bg-[#3B82F6]' : 'w-px bg-[#E7E5E4]'}`} />
-                      {/* Rank Badge + Related Badge */}
-                      <div className="flex items-center gap-2 mb-3">
-                        <div className="inline-flex items-center justify-center bg-[#3B82F6] text-white text-sm font-bold rounded px-2 py-1">
-                          #{company.rank}
-                        </div>
-                        {company.relatedCount > 0 && (
-                          <div className="inline-flex items-center gap-1 bg-[#DCFCE7] text-[#15803D] text-xs font-semibold rounded-full px-2.5 py-1">
-                            <span>👥</span>
-                            <span>{company.relatedCount} connection{company.relatedCount !== 1 ? 's' : ''}</span>
+                {(filteredCompaniesFirst ?? []).length === 0 && (filteredCompaniesSecond ?? []).length === 0 && (filteredCompaniesThird ?? []).length === 0 ? (
+                  <div className="bg-white border border-[#E7E5E4] rounded-xl p-6 text-sm text-[#78716C]">
+                    {companyNoMatchMessage}
+                  </div>
+                ) : (
+                  <motion.div
+                    className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ duration: 0.5 }}
+                  >
+                    {filteredCompaniesFirst.map((company, index) => (
+                      <motion.div
+                        key={company.name ? `${company.name}-${index}` : index}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: index * 0.05, duration: 0.4 }}
+                        whileHover={isSelectionMode ? undefined : { y: -4 }}
+                        className={`relative overflow-hidden bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && (company.filterMatchCount || 0) > 0))
+                          ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100'
+                          : 'border-[#E7E5E4]'
+                          } rounded-xl p-6 hover:shadow-md transition-all ${isSelectionMode ? 'cursor-default' : 'cursor-pointer'} ${(isTourTarget('company-card') && index === 0) ? 'relative z-[60] ring-4 ring-[#F59E0B]/50' : ''} ${isCardSelected(1, company, index) ? 'shadow-[inset_0_0_0_2px_rgba(59,130,246,0.45)]' : ''}`}
+                        data-tour={index === 0 ? 'company-card' : undefined}
+                        data-testid={`company-card-${company.rank}`}
+                        onClick={() => {
+                          if (isSelectionMode) return;
+                          incrementActivationCounter('company_card_clicks', false);
+                          incrementActivationCounter('company_cards_opened');
+                          trackCoreFeatureUsed('company_card_opened', { hop: 1, company_name: company.name, dest_org_id: company.organizationId });
+                          openCompanyDetailsInNewTab(company, 1);
+                        }}
+                      >
+                        <div className={`absolute left-0 top-0 h-full ${isCardSelected(1, company, index) ? 'w-2 bg-[#3B82F6]' : 'w-px bg-[#E7E5E4]'}`} />
+                        {/* Rank Badge + Related Badge */}
+                        <div className="flex items-center gap-2 mb-3">
+                          <div className="inline-flex items-center justify-center bg-[#3B82F6] text-white text-sm font-bold rounded px-2 py-1">
+                            #{company.rank}
                           </div>
-                        )}
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleCardSelected(1, company, index);
-                          }}
-                          className={`ml-auto w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${isCardSelected(1, company, index)
-                            ? 'bg-[#3B82F6] border-[#3B82F6] ring-1 ring-[#93C5FD]'
-                            : 'bg-white border-[#60A5FA] hover:border-[#3B82F6] ring-1 ring-[#DBEAFE]'
-                            }`}
-                          aria-label={isCardSelected(1, company, index) ? 'Unselect card' : 'Select card'}
-                        >
-                          {isCardSelected(1, company, index) && <Check className="w-3.5 h-3.5 text-white" />}
-                        </button>
-                      </div>
+                          {company.relatedCount > 0 && (
+                            <div className="inline-flex items-center gap-1 bg-[#DCFCE7] text-[#15803D] text-xs font-semibold rounded-full px-2.5 py-1">
+                              <span>👥</span>
+                              <span>{company.relatedCount} connection{company.relatedCount !== 1 ? 's' : ''}</span>
+                            </div>
+                          )}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleCardSelected(1, company, index);
+                            }}
+                            className={`ml-auto w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${isCardSelected(1, company, index)
+                              ? 'bg-[#3B82F6] border-[#3B82F6] ring-1 ring-[#93C5FD]'
+                              : 'bg-white border-[#60A5FA] hover:border-[#3B82F6] ring-1 ring-[#DBEAFE]'
+                              }`}
+                            aria-label={isCardSelected(1, company, index) ? 'Unselect card' : 'Select card'}
+                          >
+                            {isCardSelected(1, company, index) && <Check className="w-3.5 h-3.5 text-white" />}
+                          </button>
+                        </div>
 
-                      {/* Company Name */}
-                      <div className="flex items-start gap-2 mb-4">
-                        <h3
-                          className="text-lg font-bold text-[#1C1917] flex-1"
-                          style={{ fontFamily: "'Playfair Display', serif" }}
-                        >
-                          {company.name}
-                        </h3>
-                        <a
-                              href={`https://google.com/search?q=${encodeURIComponent(company.name)}+careers`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (isSelectionMode) e.preventDefault();
-                              }}
-                              className={`flex items-center gap-1 group ${isSelectionMode ? 'pointer-events-none opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-                            >
-                          {/* Icon */}
-                          <ExternalLink
-                            className="
+                        {/* Company Name */}
+                        <div className="flex items-start gap-2 mb-4">
+                          <h3
+                            className="text-lg font-bold text-[#1C1917] flex-1"
+                            style={{ fontFamily: "'Playfair Display', serif" }}
+                          >
+                            {company.name}
+                          </h3>
+                          <a
+                            href={`https://google.com/search?q=${encodeURIComponent(company.name)}+careers`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (isSelectionMode) e.preventDefault();
+                            }}
+                            className={`flex items-center gap-1 group ${isSelectionMode ? 'pointer-events-none opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                          >
+                            {/* Icon */}
+                            <ExternalLink
+                              className="
                                 w-4 h-4 text-gray-500
                                 transition-all duration-200
                                 group-hover:-translate-x-1
                               "
-                          />
+                            />
 
-                          {/* Careers text */}
-                          <span
-                            className="
+                            {/* Careers text */}
+                            <span
+                              className="
                                 text-sm text-gray-600
                                 opacity-0 max-w-0 overflow-hidden
                                 transition-all duration-200
                                 group-hover:opacity-100 group-hover:max-w-[80px]
                               "
+                            >
+                              Careers
+                            </span>
+                          </a>
+
+                        </div>
+
+                        {/* People and Recent */}
+                        <div className="grid grid-cols-2 gap-4 mb-4 pb-4 border-b border-[#E7E5E4]">
+                          <div
+                            className={`${isTourTarget('people-first') && index === 0 ? 'rounded-lg ring-4 ring-[#F59E0B]/45 p-2 -m-2' : ''}`}
+                            data-tour={index === 0 ? 'people-first' : undefined}
                           >
-                            Careers
-                          </span>
-                        </a>
+                            <p className="text-xs text-[#78716C] mb-1">People (1st transition only):</p>
+                            <p className="text-xl font-bold text-[#1C1917]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+                              {company.people}
+                            </p>
+                          </div>
+                          <div
+                            className={`${isTourTarget('people-other') && index === 0 ? 'rounded-lg ring-4 ring-[#F59E0B]/45 p-2 -m-2' : ''}`}
+                            data-tour={index === 0 ? 'people-other' : undefined}
+                          >
+                            <p className="text-xs text-[#78716C] mb-1">People (other transitions):</p>
+                            <p className="text-xl font-bold text-[#1C1917]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+                              {company.otherHopsCount}
+                            </p>
+                          </div>
+                        </div>
 
-                      </div>
-
-                      {/* People and Recent */}
-                      <div className="grid grid-cols-2 gap-4 mb-4 pb-4 border-b border-[#E7E5E4]">
                         <div
-                          className={`${isTourTarget('people-first') && index === 0 ? 'rounded-lg ring-4 ring-[#F59E0B]/45 p-2 -m-2' : ''}`}
-                          data-tour={index === 0 ? 'people-first' : undefined}
+                          className={`grid grid-cols-1 gap-4 mb-4 pb-4 border-b border-[#E7E5E4] ${isTourTarget('recent') && index === 0 ? 'rounded-lg ring-4 ring-[#F59E0B]/45 p-2 -m-2' : ''}`}
+                          data-tour={index === 0 ? 'recent' : undefined}
                         >
-                          <p className="text-xs text-[#78716C] mb-1">People (1st transition only):</p>
-                          <p className="text-xl font-bold text-[#1C1917]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
-                            {company.people}
-                          </p>
+                          <div>
+                            <p className="text-xs text-[#78716C] mb-1">Recent:</p>
+                            <p className="text-xl font-bold text-[#1C1917]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+                              {company.recent}
+                            </p>
+                          </div>
                         </div>
+
+                        {/* By transitions */}
+                        <div className="mb-4">
+                          <p className="text-xs font-medium text-[#78716C] mb-2">By transitions:</p>
+                          <div className="space-y-1">
+                            {(company.transitions || []).map((t, i) => (
+                              <div key={i} className="flex justify-between text-sm">
+                                <span className="text-[#78716C]">{t.moves} move{t.moves > 1 ? 's' : ''}:</span>
+                                <span className="font-semibold text-[#1C1917]">{t.count} people</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Years */}
                         <div
-                          className={`${isTourTarget('people-other') && index === 0 ? 'rounded-lg ring-4 ring-[#F59E0B]/45 p-2 -m-2' : ''}`}
-                          data-tour={index === 0 ? 'people-other' : undefined}
+                          className={`flex flex-wrap gap-2 ${isTourTarget('years-list') && index === 0 ? 'rounded-lg ring-4 ring-[#F59E0B]/45 p-2 -m-2' : ''}`}
+                          data-tour={index === 0 ? 'years-list' : undefined}
                         >
-                          <p className="text-xs text-[#78716C] mb-1">People (other transitions):</p>
-                          <p className="text-xl font-bold text-[#1C1917]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
-                            {company.otherHopsCount}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div
-                        className={`grid grid-cols-1 gap-4 mb-4 pb-4 border-b border-[#E7E5E4] ${isTourTarget('recent') && index === 0 ? 'rounded-lg ring-4 ring-[#F59E0B]/45 p-2 -m-2' : ''}`}
-                        data-tour={index === 0 ? 'recent' : undefined}
-                      >
-                        <div>
-                          <p className="text-xs text-[#78716C] mb-1">Recent:</p>
-                          <p className="text-xl font-bold text-[#1C1917]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
-                            {company.recent}
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* By transitions */}
-                      <div className="mb-4">
-                        <p className="text-xs font-medium text-[#78716C] mb-2">By transitions:</p>
-                        <div className="space-y-1">
-                          {(company.transitions || []).map((t, i) => (
-                            <div key={i} className="flex justify-between text-sm">
-                              <span className="text-[#78716C]">{t.moves} move{t.moves > 1 ? 's' : ''}:</span>
-                              <span className="font-semibold text-[#1C1917]">{t.count} people</span>
-                            </div>
+                          {(company.years || []).map((year, i) => (
+                            <span
+                              key={i}
+                              className="px-3 py-1 bg-[#F5F5F4] text-[#1C1917] text-sm font-medium rounded-md"
+                              style={{ fontFamily: "'JetBrains Mono', monospace" }}
+                            >
+                              {year}
+                            </span>
                           ))}
                         </div>
-                      </div>
-
-                      {/* Years */}
-                      <div
-                        className={`flex flex-wrap gap-2 ${isTourTarget('years-list') && index === 0 ? 'rounded-lg ring-4 ring-[#F59E0B]/45 p-2 -m-2' : ''}`}
-                        data-tour={index === 0 ? 'years-list' : undefined}
-                      >
-                        {(company.years || []).map((year, i) => (
-                          <span
-                            key={i}
-                            className="px-3 py-1 bg-[#F5F5F4] text-[#1C1917] text-sm font-medium rounded-md"
-                            style={{ fontFamily: "'JetBrains Mono', monospace" }}
-                          >
-                            {year}
-                          </span>
-                        ))}
-                      </div>
-                    </motion.div>
-                  ))}
-                </motion.div>
+                      </motion.div>
+                    ))}
+                  </motion.div>
+                )}
               </>
             )}
             {/* 2nd Transitions Section */}
@@ -2423,9 +2494,9 @@ const Dashboard = () => {
               </motion.div>
             )}
 
-            {(alumni ?? []).length === 0 && !loadingAlumni && (
+            {(filteredAlumni ?? []).length === 0 && !loadingAlumni && (
               <div className="text-center py-24">
-                <p className="text-[#78716C]">No alumni data found for this period.</p>
+                <p className="text-[#78716C]">{alumniNoMatchMessage}</p>
               </div>
             )}
           </div>
