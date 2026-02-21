@@ -1096,6 +1096,46 @@ def org_transitions():
                     total_counts_by_org_id.get(org_id_dest, 0) + data["count"]
                 )
 
+        # For connection filters, compute transition-match counts per destination org
+        # so dashboard cards can prioritize/highlight transition-based matches too.
+        transition_match_count_by_org: dict[int, int] = {}
+        if connection_filters and user_id and transition_emp_ids_by_org:
+            all_transition_emp_ids = set()
+            for emp_ids in transition_emp_ids_by_org.values():
+                all_transition_emp_ids.update(emp_ids)
+
+            if all_transition_emp_ids:
+                transition_emp_ids_list = list(all_transition_emp_ids)
+                transition_exps_by_emp = {
+                    eid: exps_by_emp.get(eid, [])
+                    for eid in transition_emp_ids_list
+                }
+
+                all_transition_edus = (
+                    db.query(Education)
+                    .filter(Education.employee_id.in_(transition_emp_ids_list))
+                    .all()
+                )
+                transition_edus_by_emp = {}
+                for edu in all_transition_edus:
+                    transition_edus_by_emp.setdefault(edu.employee_id, []).append(edu)
+                for eid in transition_emp_ids_list:
+                    transition_edus_by_emp.setdefault(eid, [])
+
+                transition_match_map = _alumni_pass_connection_filters(
+                    db,
+                    user_id,
+                    transition_emp_ids_list,
+                    transition_exps_by_emp,
+                    transition_edus_by_emp,
+                    connection_filters,
+                )
+
+                for org_id_dest, emp_ids in transition_emp_ids_by_org.items():
+                    transition_match_count_by_org[org_id_dest] = sum(
+                        1 for eid in emp_ids if transition_match_map.get(eid, False)
+                    )
+
         # Build final response with org ids/names (sorted by hop-specific count descending)
         result = {}
         for hop_num, org_map in sorted(hop_counts.items()):
@@ -1116,6 +1156,10 @@ def org_transitions():
                     # True if at least one hire from the source org into a role
                     # whose name matches the optional `role` filter (any hop).
                     "role_match": org_id in role_match_org_ids,
+                    # Number of transition people (source -> destination) matching connection filters.
+                    "transition_match_count": transition_match_count_by_org.get(org_id, 0),
+                    # Alias used by frontend highlight set.
+                    "match": transition_match_count_by_org.get(org_id, 0) > 0,
                 }
                 for org_id, data in sorted_orgs
             ]

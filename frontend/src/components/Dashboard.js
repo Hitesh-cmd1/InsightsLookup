@@ -137,12 +137,17 @@ function mapTransitions(apiResult, relatedByDest) {
           years: new Set(),
           hops: {}, // { [hopNumber]: count }
           totalCount: 0,
+          transitionMatchCount: 0,
         });
       }
       const entry = perOrg.get(orgId);
       entry.hops[hopNum] = (entry.hops[hopNum] || 0) + (item.count || 0);
       entry.totalCount =
         item.total_count != null ? item.total_count : entry.totalCount + (item.count || 0);
+      entry.transitionMatchCount = Math.max(
+        Number(entry.transitionMatchCount || 0),
+        Number(item.transition_match_count || 0)
+      );
       (item.years || []).forEach((y) => entry.years.add(y));
     });
   });
@@ -158,6 +163,8 @@ function mapTransitions(apiResult, relatedByDest) {
       const otherHopsCount = entry.totalCount - hopCount;
       const relEntry = relMap[String(entry.organizationId)] || null;
       const relatedCount = relEntry ? ((relEntry.match_count ?? relEntry.count) || 0) : 0;
+      const transitionMatchCount = Number(entry.transitionMatchCount || 0);
+      const filterMatchCount = relatedCount + transitionMatchCount;
 
       cards.push({
         organizationId: entry.organizationId,
@@ -180,6 +187,8 @@ function mapTransitions(apiResult, relatedByDest) {
         years: yearsArr.sort((a, b) => b - a),
         // Related background: current employees sharing user's org/school background
         relatedCount,
+        transitionMatchCount,
+        filterMatchCount,
         relatedBackground: relEntry || null,
       });
     });
@@ -188,6 +197,7 @@ function mapTransitions(apiResult, relatedByDest) {
     // and relatedCount as a secondary tie-breaker.
     cards.sort((a, b) =>
       b.people - a.people ||
+      b.filterMatchCount - a.filterMatchCount ||
       b.relatedCount - a.relatedCount ||
       a.name.localeCompare(b.name)
     );
@@ -747,7 +757,8 @@ const Dashboard = () => {
     const base = Array.isArray(list) ? [...list] : [];
     if (!isConnectionFilterActive) return base;
     base.sort((a, b) =>
-      Number((b.relatedCount || 0) > 0) - Number((a.relatedCount || 0) > 0) ||
+      Number((b.filterMatchCount || 0) > 0) - Number((a.filterMatchCount || 0) > 0) ||
+      (b.filterMatchCount || 0) - (a.filterMatchCount || 0) ||
       (b.relatedCount || 0) - (a.relatedCount || 0) ||
       (a.rank || 0) - (b.rank || 0)
     );
@@ -770,7 +781,7 @@ const Dashboard = () => {
     if (!isConnectionFilterActive) return 0;
     const matched = new Set();
     [...filteredCompaniesFirst, ...filteredCompaniesSecond, ...filteredCompaniesThird].forEach((c) => {
-      if ((c?.relatedCount || 0) > 0 && c?.organizationId != null) matched.add(c.organizationId);
+      if ((c?.filterMatchCount || 0) > 0 && c?.organizationId != null) matched.add(c.organizationId);
     });
     return matched.size;
   }, [isConnectionFilterActive, filteredCompaniesFirst, filteredCompaniesSecond, filteredCompaniesThird]);
@@ -1884,7 +1895,7 @@ const Dashboard = () => {
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.05, duration: 0.4 }}
                       whileHover={isSelectionMode ? undefined : { y: -4 }}
-                      className={`relative overflow-hidden bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && company.relatedCount > 0))
+                      className={`relative overflow-hidden bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && (company.filterMatchCount || 0) > 0))
                         ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100'
                         : 'border-[#E7E5E4]'
                         } rounded-xl p-6 hover:shadow-md transition-all ${isSelectionMode ? 'cursor-default' : 'cursor-pointer'} ${(isTourTarget('company-card') && index === 0) ? 'relative z-[60] ring-4 ring-[#F59E0B]/50' : ''} ${isCardSelected(1, company, index) ? 'shadow-[inset_0_0_0_2px_rgba(59,130,246,0.45)]' : ''}`}
@@ -2060,7 +2071,7 @@ const Dashboard = () => {
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.05, duration: 0.4 }}
                       whileHover={isSelectionMode ? undefined : { y: -4 }}
-                      className={`relative overflow-hidden bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && company.relatedCount > 0))
+                      className={`relative overflow-hidden bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && (company.filterMatchCount || 0) > 0))
                         ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100'
                         : 'border-[#E7E5E4]'
                         } rounded-xl p-6 hover:shadow-md transition-all ${isSelectionMode ? 'cursor-default' : 'cursor-pointer'} ${isCardSelected(2, company, index) ? 'shadow-[inset_0_0_0_2px_rgba(59,130,246,0.45)]' : ''}`}
@@ -2211,7 +2222,7 @@ const Dashboard = () => {
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.05, duration: 0.4 }}
                       whileHover={isSelectionMode ? undefined : { y: -4 }}
-                      className={`relative overflow-hidden bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && company.relatedCount > 0))
+                      className={`relative overflow-hidden bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && (company.filterMatchCount || 0) > 0))
                         ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100'
                         : 'border-[#E7E5E4]'
                         } rounded-xl p-6 hover:shadow-md transition-all ${isSelectionMode ? 'cursor-default' : 'cursor-pointer'} ${isCardSelected(3, company, index) ? 'shadow-[inset_0_0_0_2px_rgba(59,130,246,0.45)]' : ''}`}
