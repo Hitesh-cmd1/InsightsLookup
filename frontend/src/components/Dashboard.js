@@ -949,6 +949,7 @@ const Dashboard = () => {
     return names;
   }, [selectedCards]);
   const selectedCount = selectedCards.size;
+  const isSelectionMode = selectedCount > 0;
   const selectedPreview = selectedCompanyNames.slice(0, 3).join(', ');
   const selectedOverflow = Math.max(0, selectedCompanyNames.length - 3);
   const selectedSummaryText = selectedPreview
@@ -974,6 +975,7 @@ const Dashboard = () => {
 
       const params = new URLSearchParams();
       if (keywords) params.set('keywords', keywords);
+      params.set('f_TPR', 'r2592000');
       if (ids.length > 0) params.set('f_C', ids.join(','));
       const q = params.toString();
       const url = `https://www.linkedin.com/jobs/search-results/${q ? `?${q}` : ''}`;
@@ -1881,14 +1883,15 @@ const Dashboard = () => {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.05, duration: 0.4 }}
-                      whileHover={{ y: -4 }}
+                      whileHover={isSelectionMode ? undefined : { y: -4 }}
                       className={`relative overflow-hidden bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && company.relatedCount > 0))
                         ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100'
                         : 'border-[#E7E5E4]'
-                        } rounded-xl p-6 hover:shadow-md transition-all cursor-pointer ${(isTourTarget('company-card') && index === 0) ? 'relative z-[60] ring-4 ring-[#F59E0B]/50' : ''} ${isCardSelected(1, company, index) ? 'shadow-[inset_0_0_0_2px_rgba(59,130,246,0.45)]' : ''}`}
+                        } rounded-xl p-6 hover:shadow-md transition-all ${isSelectionMode ? 'cursor-default' : 'cursor-pointer'} ${(isTourTarget('company-card') && index === 0) ? 'relative z-[60] ring-4 ring-[#F59E0B]/50' : ''} ${isCardSelected(1, company, index) ? 'shadow-[inset_0_0_0_2px_rgba(59,130,246,0.45)]' : ''}`}
                       data-tour={index === 0 ? 'company-card' : undefined}
                       data-testid={`company-card-${company.rank}`}
                       onClick={() => {
+                        if (isSelectionMode) return;
                         incrementActivationCounter('company_card_clicks', false);
                         incrementActivationCounter('company_cards_opened');
                         trackCoreFeatureUsed('company_card_opened', { hop: 1, company_name: company.name, dest_org_id: company.organizationId });
@@ -1913,7 +1916,10 @@ const Dashboard = () => {
                             e.stopPropagation();
                             toggleCardSelected(1, company, index);
                           }}
-                          className={`ml-auto w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${isCardSelected(1, company, index) ? 'bg-[#3B82F6] border-[#3B82F6]' : 'bg-white border-[#D6D3D1] hover:border-[#3B82F6]'}`}
+                          className={`ml-auto w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${isCardSelected(1, company, index)
+                            ? 'bg-[#3B82F6] border-[#3B82F6] ring-1 ring-[#93C5FD]'
+                            : 'bg-white border-[#60A5FA] hover:border-[#3B82F6] ring-1 ring-[#DBEAFE]'
+                            }`}
                           aria-label={isCardSelected(1, company, index) ? 'Unselect card' : 'Select card'}
                         >
                           {isCardSelected(1, company, index) && <Check className="w-3.5 h-3.5 text-white" />}
@@ -1929,12 +1935,15 @@ const Dashboard = () => {
                           {company.name}
                         </h3>
                         <a
-                          href={`https://google.com/search?q=${encodeURIComponent(company.name)}+careers`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="flex items-center gap-1 group cursor-pointer"
-                        >
+                              href={`https://google.com/search?q=${encodeURIComponent(company.name)}+careers`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (isSelectionMode) e.preventDefault();
+                              }}
+                              className={`flex items-center gap-1 group ${isSelectionMode ? 'pointer-events-none opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                            >
                           {/* Icon */}
                           <ExternalLink
                             className="
@@ -2050,12 +2059,13 @@ const Dashboard = () => {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.05, duration: 0.4 }}
-                      whileHover={{ y: -4 }}
+                      whileHover={isSelectionMode ? undefined : { y: -4 }}
                       className={`relative overflow-hidden bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && company.relatedCount > 0))
                         ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100'
                         : 'border-[#E7E5E4]'
-                        } rounded-xl p-6 hover:shadow-md transition-all cursor-pointer ${isCardSelected(2, company, index) ? 'shadow-[inset_0_0_0_2px_rgba(59,130,246,0.45)]' : ''}`}
+                        } rounded-xl p-6 hover:shadow-md transition-all ${isSelectionMode ? 'cursor-default' : 'cursor-pointer'} ${isCardSelected(2, company, index) ? 'shadow-[inset_0_0_0_2px_rgba(59,130,246,0.45)]' : ''}`}
                       onClick={() => {
+                        if (isSelectionMode) return;
                         incrementActivationCounter('company_card_clicks', false);
                         incrementActivationCounter('company_cards_opened');
                         trackCoreFeatureUsed('company_card_opened', { hop: 2, company_name: company.name, dest_org_id: company.organizationId });
@@ -2079,7 +2089,10 @@ const Dashboard = () => {
                             e.stopPropagation();
                             toggleCardSelected(2, company, index);
                           }}
-                          className={`ml-auto w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${isCardSelected(2, company, index) ? 'bg-[#3B82F6] border-[#3B82F6]' : 'bg-white border-[#D6D3D1] hover:border-[#3B82F6]'}`}
+                          className={`ml-auto w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${isCardSelected(2, company, index)
+                            ? 'bg-[#3B82F6] border-[#3B82F6] ring-1 ring-[#93C5FD]'
+                            : 'bg-white border-[#60A5FA] hover:border-[#3B82F6] ring-1 ring-[#DBEAFE]'
+                            }`}
                           aria-label={isCardSelected(2, company, index) ? 'Unselect card' : 'Select card'}
                         >
                           {isCardSelected(2, company, index) && <Check className="w-3.5 h-3.5 text-white" />}
@@ -2097,7 +2110,11 @@ const Dashboard = () => {
                           href="https://google.com"
                           target="_blank"
                           rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()} // Prevent card click navigation
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (isSelectionMode) e.preventDefault();
+                          }} // Prevent card click navigation
+                          className={isSelectionMode ? 'pointer-events-none opacity-50 cursor-not-allowed' : ''}
                         >
                           <ExternalLink className="w-4 h-4 text-[#78716C] flex-shrink-0 cursor-pointer hover:text-[#3B82F6]" />
                         </a>
@@ -2193,12 +2210,13 @@ const Dashboard = () => {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.05, duration: 0.4 }}
-                      whileHover={{ y: -4 }}
+                      whileHover={isSelectionMode ? undefined : { y: -4 }}
                       className={`relative overflow-hidden bg-white border ${(isOrgHighlighted(company.organizationId) || (appliedConnectionFilters && company.relatedCount > 0))
                         ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/100'
                         : 'border-[#E7E5E4]'
-                        } rounded-xl p-6 hover:shadow-md transition-all cursor-pointer ${isCardSelected(3, company, index) ? 'shadow-[inset_0_0_0_2px_rgba(59,130,246,0.45)]' : ''}`}
+                        } rounded-xl p-6 hover:shadow-md transition-all ${isSelectionMode ? 'cursor-default' : 'cursor-pointer'} ${isCardSelected(3, company, index) ? 'shadow-[inset_0_0_0_2px_rgba(59,130,246,0.45)]' : ''}`}
                       onClick={() => {
+                        if (isSelectionMode) return;
                         incrementActivationCounter('company_card_clicks', false);
                         incrementActivationCounter('company_cards_opened');
                         trackCoreFeatureUsed('company_card_opened', { hop: 3, company_name: company.name, dest_org_id: company.organizationId });
@@ -2216,7 +2234,10 @@ const Dashboard = () => {
                             e.stopPropagation();
                             toggleCardSelected(3, company, index);
                           }}
-                          className={`ml-auto w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${isCardSelected(3, company, index) ? 'bg-[#3B82F6] border-[#3B82F6]' : 'bg-white border-[#D6D3D1] hover:border-[#3B82F6]'}`}
+                          className={`ml-auto w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${isCardSelected(3, company, index)
+                            ? 'bg-[#3B82F6] border-[#3B82F6] ring-1 ring-[#93C5FD]'
+                            : 'bg-white border-[#60A5FA] hover:border-[#3B82F6] ring-1 ring-[#DBEAFE]'
+                            }`}
                           aria-label={isCardSelected(3, company, index) ? 'Unselect card' : 'Select card'}
                         >
                           {isCardSelected(3, company, index) && <Check className="w-3.5 h-3.5 text-white" />}
@@ -2234,7 +2255,11 @@ const Dashboard = () => {
                           href={`https://google.com/search?q=${encodeURIComponent(company.name)}+careers`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (isSelectionMode) e.preventDefault();
+                          }}
+                          className={isSelectionMode ? 'pointer-events-none opacity-50 cursor-not-allowed' : ''}
                         >
                           <ExternalLink className="w-4 h-4 text-[#78716C] flex-shrink-0 cursor-pointer hover:text-[#3B82F6]" />
                         </a>
@@ -2463,7 +2488,7 @@ const Dashboard = () => {
                   onClick={() => setIsRoleModalOpen(true)}
                   className="h-11 px-7 rounded-2xl bg-[#3B82F6] text-white font-semibold hover:bg-[#2563EB] transition-all inline-flex items-center text-sm shadow-lg shadow-[#3B82F6]/20"
                 >
-                  Find Jobs
+                  Find `Jobs`
                 </button>
               </div>
             </div>

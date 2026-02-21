@@ -19,6 +19,7 @@ if __name__ == "__main__":
     parser.add_argument("--school_id")
     parser.add_argument("--past_org")
     parser.add_argument("--keyword")
+    parser.add_argument("--geo_urn")
     parser.add_argument("--end", required=True)
 
     args = parser.parse_args()
@@ -28,5 +29,5 @@ if __name__ == "__main__":
         start = 0
     end = int(args.end)
     while start < end:
-        get_people(args.cookie, start, args.school_id, args.past_org, args.keyword)
+        get_people(args.cookie, start, args.school_id, args.past_org, args.keyword, args.geo_urn)
         start= start + 3

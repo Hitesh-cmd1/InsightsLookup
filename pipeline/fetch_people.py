@@ -6,7 +6,7 @@ def get_profile_id(profile):
     if "*entityResult" in profile:
         return profile["*entityResult"].split(":")[6].split(",")[0]
 
-def get_people(cookie, start=0,school_id=None, past_org=None, keyword=None):
+def get_people(cookie, start=0, school_id=None, past_org=None, keyword=None, geo_urn=None):
     print(start)
     # Initialize database tables if they don't exist
     init_db()
@@ -17,6 +17,8 @@ def get_people(cookie, start=0,school_id=None, past_org=None, keyword=None):
 
     if past_org:
         filter = filter + ",(key:pastCompany,value:List("+str(past_org)+"))"
+    if geo_urn:
+        filter = filter + ",(key:geoUrn,value:List("+str(geo_urn)+"))"
     keyword_filter= ""
     if keyword:
         keyword_filter = "keywords:"+keyword+","
