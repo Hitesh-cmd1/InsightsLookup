@@ -288,7 +288,7 @@ const CompanyDetails = () => {
   return (
     <div className="min-h-screen bg-[#FAFAF9]">
       {/* Header */}
-      <header className="bg-white border-b border-[#E7E5E4]">
+      <header className="bg-white border-b border-[#E7E5E4] sticky top-0 z-50">
         <div className="max-w-[1600px] mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-6">
             <div
@@ -490,170 +490,170 @@ const CompanyDetails = () => {
                           : 'border-[#E7E5E4]'
                           }`}
                       >
-                      <div className="flex justify-between items-center mb-3">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <p
-                              className="text-base font-semibold text-[#1C1917]"
-                              style={{ fontFamily: "'Playfair Display', serif" }}
-                            >
-                              {emp.employee_name || `Employee ${emp.employee_id}`}
+                        <div className="flex justify-between items-center mb-3">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <p
+                                className="text-base font-semibold text-[#1C1917]"
+                                style={{ fontFamily: "'Playfair Display', serif" }}
+                              >
+                                {emp.employee_name || `Employee ${emp.employee_id}`}
+                              </p>
+                              <a
+                                href={buildLinkedInSearchUrl(emp.employee_name || `Employee ${emp.employee_id}`, getTopCompanyNames(emp.experience_history))}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={`Search ${(emp.employee_name || `Employee ${emp.employee_id}`)} on LinkedIn`}
+                                className="inline-flex items-center text-[#2563EB] hover:text-[#1D4ED8]"
+                              >
+                                <ExternalLink className="w-4 h-4" />
+                              </a>
+                              {(hasConnectionFilters && emp.is_match) && (
+                                <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider rounded-full">
+                                  Filter Matched
+                                </span>
+                              )}
+                              {!hasConnectionFilters && emp.role_match && (
+                                <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider rounded-full">
+                                  Role Matched
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-[#78716C]">
+                              Exit: {emp.exit_date || '—'} · Transition: {emp.transition_date || '—'}
                             </p>
-                            <a
-                              href={buildLinkedInSearchUrl(emp.employee_name || `Employee ${emp.employee_id}`, getTopCompanyNames(emp.experience_history))}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              title={`Search ${(emp.employee_name || `Employee ${emp.employee_id}`)} on LinkedIn`}
-                              className="inline-flex items-center text-[#2563EB] hover:text-[#1D4ED8]"
-                            >
-                              <ExternalLink className="w-4 h-4" />
-                            </a>
-                            {(hasConnectionFilters && emp.is_match) && (
-                              <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider rounded-full">
-                                Filter Matched
-                              </span>
+                          </div>
+                        </div>
+
+                        {(hasConnectionFilters && emp.is_match && personHasFilterEvidence(emp)) && (
+                          <div className="mb-3 space-y-2">
+                            {(getMatchDetails(emp).work_matches || []).length > 0 && (
+                              <div>
+                                <p className="text-[11px] font-semibold text-blue-700 uppercase tracking-wide mb-1">Matched work criteria</p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {(getMatchDetails(emp).work_matches || []).map((m, idx) => (
+                                    <span key={`trans-work-match-${idx}`} className="px-2 py-1 text-[11px] rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                                      {(m.organization || 'Unknown')} {m.role ? `• ${m.role}` : ''} {Array.isArray(m.matched_fields) && m.matched_fields.length > 0 ? `(${m.matched_fields.join(', ')})` : ''}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
                             )}
-                            {!hasConnectionFilters && emp.role_match && (
-                              <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider rounded-full">
-                                Role Matched
-                              </span>
+                            {(getMatchDetails(emp).education_matches || []).length > 0 && (
+                              <div>
+                                <p className="text-[11px] font-semibold text-blue-700 uppercase tracking-wide mb-1">Matched education criteria</p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {(getMatchDetails(emp).education_matches || []).map((m, idx) => (
+                                    <span key={`trans-edu-match-${idx}`} className="px-2 py-1 text-[11px] rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                                      {(m.school || 'Unknown')} {m.degree ? `• ${m.degree}` : ''} {Array.isArray(m.matched_fields) && m.matched_fields.length > 0 ? `(${m.matched_fields.join(', ')})` : ''}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
                             )}
                           </div>
-                          <p className="text-xs text-[#78716C]">
-                            Exit: {emp.exit_date || '—'} · Transition: {emp.transition_date || '—'}
+                        )}
+                        <div>
+                          <p className="text-xs font-medium text-[#78716C] mb-2">
+                            Experience history
                           </p>
+                          <div className="mb-2 flex flex-wrap gap-3 text-[10px]">
+                            <span className="inline-flex items-center gap-1.5">
+                              <span className="w-3 h-3 rounded-sm bg-amber-100 border border-amber-300" />
+                              Source (exit)
+                            </span>
+                            <span className="inline-flex items-center gap-1.5">
+                              <span className="w-3 h-3 rounded-sm bg-slate-100 border border-slate-300" />
+                              Internal (same org)
+                            </span>
+                            <span className="inline-flex items-center gap-1.5">
+                              <span className="w-3 h-3 rounded-sm bg-emerald-100 border border-emerald-400" />
+                              Hop used for this transition
+                            </span>
+                            <span className="inline-flex items-center gap-1.5">
+                              <span className="w-3 h-3 rounded-sm bg-blue-50 border border-blue-200" />
+                              Other hops
+                            </span>
+                            <span className="inline-flex items-center gap-1.5">
+                              <span className="w-3 h-3 rounded-sm bg-transparent" />
+                              Prior
+                            </span>
+                          </div>
+                          <div className="overflow-x-auto">
+                            <table className="min-w-full text-left text-xs">
+                              <thead>
+                                <tr className="border-b border-[#E7E5E4] bg-[#F5F5F4]">
+                                  <th className="px-3 py-2 font-semibold text-[#1C1917]">
+                                    Organization
+                                  </th>
+                                  <th className="px-3 py-2 font-semibold text-[#1C1917]">
+                                    Role
+                                  </th>
+                                  <th className="px-3 py-2 font-semibold text-[#1C1917]">
+                                    Start
+                                  </th>
+                                  <th className="px-3 py-2 font-semibold text-[#1C1917]">
+                                    End
+                                  </th>
+                                  <th className="px-3 py-2 font-semibold text-[#1C1917] w-28">
+                                    Used for
+                                  </th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(emp.experience_history || []).map((exp, idx) => {
+                                  const seg = exp.transition_segment || 'prior';
+                                  const isHopUsed = seg === `hop_${hop}`;
+                                  const filterMatchedRow = experienceMatchedByFilter(emp, exp);
+                                  const rowClass =
+                                    seg === 'source'
+                                      ? 'bg-amber-50 border-b border-[#F5F5F4] border-l-4 border-l-amber-400'
+                                      : seg === 'internal_at_source'
+                                        ? 'bg-slate-50 border-b border-[#F5F5F4] border-l-4 border-l-slate-300'
+                                        : isHopUsed
+                                          ? 'bg-emerald-50 border-b border-[#F5F5F4] border-l-4 border-l-emerald-500 font-medium'
+                                          : seg.startsWith('hop_')
+                                            ? 'bg-blue-50/70 border-b border-[#F5F5F4] border-l-4 border-l-blue-200'
+                                            : 'border-b border-[#F5F5F4]';
+                                  const label =
+                                    seg === 'source'
+                                      ? 'Source (exit)'
+                                      : seg === 'internal_at_source'
+                                        ? 'Internal (same org)'
+                                        : isHopUsed
+                                          ? `Hop ${hop} (this transition)`
+                                          : seg.startsWith('hop_')
+                                            ? `Hop ${seg.replace('hop_', '')}`
+                                            : '—';
+                                  return (
+                                    <tr key={idx} className={`${rowClass} ${filterMatchedRow ? 'bg-blue-100/70' : ''}`}>
+                                      <td className="px-3 py-2 text-[#1C1917]">
+                                        {exp.organization || 'Unknown'}
+                                      </td>
+                                      <td className="px-3 py-2 text-[#78716C]">
+                                        {exp.role || '—'}
+                                      </td>
+                                      <td className="px-3 py-2 text-[#78716C]">
+                                        {exp.start_date || '—'}
+                                      </td>
+                                      <td className="px-3 py-2 text-[#78716C]">
+                                        {exp.end_date || '—'}
+                                      </td>
+                                      <td className="px-3 py-2 text-[#78716C] font-medium">
+                                        {label}
+                                        {filterMatchedRow && (
+                                          <span className="ml-2 px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-semibold uppercase tracking-wide">
+                                            Filter
+                                          </span>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
-                      </div>
-
-                      {(hasConnectionFilters && emp.is_match && personHasFilterEvidence(emp)) && (
-                        <div className="mb-3 space-y-2">
-                          {(getMatchDetails(emp).work_matches || []).length > 0 && (
-                            <div>
-                              <p className="text-[11px] font-semibold text-blue-700 uppercase tracking-wide mb-1">Matched work criteria</p>
-                              <div className="flex flex-wrap gap-1.5">
-                                {(getMatchDetails(emp).work_matches || []).map((m, idx) => (
-                                  <span key={`trans-work-match-${idx}`} className="px-2 py-1 text-[11px] rounded-full bg-blue-50 text-blue-700 border border-blue-200">
-                                    {(m.organization || 'Unknown')} {m.role ? `• ${m.role}` : ''} {Array.isArray(m.matched_fields) && m.matched_fields.length > 0 ? `(${m.matched_fields.join(', ')})` : ''}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                          {(getMatchDetails(emp).education_matches || []).length > 0 && (
-                            <div>
-                              <p className="text-[11px] font-semibold text-blue-700 uppercase tracking-wide mb-1">Matched education criteria</p>
-                              <div className="flex flex-wrap gap-1.5">
-                                {(getMatchDetails(emp).education_matches || []).map((m, idx) => (
-                                  <span key={`trans-edu-match-${idx}`} className="px-2 py-1 text-[11px] rounded-full bg-blue-50 text-blue-700 border border-blue-200">
-                                    {(m.school || 'Unknown')} {m.degree ? `• ${m.degree}` : ''} {Array.isArray(m.matched_fields) && m.matched_fields.length > 0 ? `(${m.matched_fields.join(', ')})` : ''}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      <div>
-                        <p className="text-xs font-medium text-[#78716C] mb-2">
-                          Experience history
-                        </p>
-                        <div className="mb-2 flex flex-wrap gap-3 text-[10px]">
-                          <span className="inline-flex items-center gap-1.5">
-                            <span className="w-3 h-3 rounded-sm bg-amber-100 border border-amber-300" />
-                            Source (exit)
-                          </span>
-                          <span className="inline-flex items-center gap-1.5">
-                            <span className="w-3 h-3 rounded-sm bg-slate-100 border border-slate-300" />
-                            Internal (same org)
-                          </span>
-                          <span className="inline-flex items-center gap-1.5">
-                            <span className="w-3 h-3 rounded-sm bg-emerald-100 border border-emerald-400" />
-                            Hop used for this transition
-                          </span>
-                          <span className="inline-flex items-center gap-1.5">
-                            <span className="w-3 h-3 rounded-sm bg-blue-50 border border-blue-200" />
-                            Other hops
-                          </span>
-                          <span className="inline-flex items-center gap-1.5">
-                            <span className="w-3 h-3 rounded-sm bg-transparent" />
-                            Prior
-                          </span>
-                        </div>
-                        <div className="overflow-x-auto">
-                          <table className="min-w-full text-left text-xs">
-                            <thead>
-                              <tr className="border-b border-[#E7E5E4] bg-[#F5F5F4]">
-                                <th className="px-3 py-2 font-semibold text-[#1C1917]">
-                                  Organization
-                                </th>
-                                <th className="px-3 py-2 font-semibold text-[#1C1917]">
-                                  Role
-                                </th>
-                                <th className="px-3 py-2 font-semibold text-[#1C1917]">
-                                  Start
-                                </th>
-                                <th className="px-3 py-2 font-semibold text-[#1C1917]">
-                                  End
-                                </th>
-                                <th className="px-3 py-2 font-semibold text-[#1C1917] w-28">
-                                  Used for
-                                </th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {(emp.experience_history || []).map((exp, idx) => {
-                                const seg = exp.transition_segment || 'prior';
-                                const isHopUsed = seg === `hop_${hop}`;
-                                const filterMatchedRow = experienceMatchedByFilter(emp, exp);
-                                const rowClass =
-                                  seg === 'source'
-                                    ? 'bg-amber-50 border-b border-[#F5F5F4] border-l-4 border-l-amber-400'
-                                    : seg === 'internal_at_source'
-                                      ? 'bg-slate-50 border-b border-[#F5F5F4] border-l-4 border-l-slate-300'
-                                      : isHopUsed
-                                        ? 'bg-emerald-50 border-b border-[#F5F5F4] border-l-4 border-l-emerald-500 font-medium'
-                                        : seg.startsWith('hop_')
-                                          ? 'bg-blue-50/70 border-b border-[#F5F5F4] border-l-4 border-l-blue-200'
-                                          : 'border-b border-[#F5F5F4]';
-                                const label =
-                                  seg === 'source'
-                                    ? 'Source (exit)'
-                                    : seg === 'internal_at_source'
-                                      ? 'Internal (same org)'
-                                      : isHopUsed
-                                        ? `Hop ${hop} (this transition)`
-                                        : seg.startsWith('hop_')
-                                          ? `Hop ${seg.replace('hop_', '')}`
-                                          : '—';
-                                return (
-                                  <tr key={idx} className={`${rowClass} ${filterMatchedRow ? 'bg-blue-100/70' : ''}`}>
-                                    <td className="px-3 py-2 text-[#1C1917]">
-                                      {exp.organization || 'Unknown'}
-                                    </td>
-                                    <td className="px-3 py-2 text-[#78716C]">
-                                      {exp.role || '—'}
-                                    </td>
-                                    <td className="px-3 py-2 text-[#78716C]">
-                                      {exp.start_date || '—'}
-                                    </td>
-                                    <td className="px-3 py-2 text-[#78716C]">
-                                      {exp.end_date || '—'}
-                                    </td>
-                                    <td className="px-3 py-2 text-[#78716C] font-medium">
-                                      {label}
-                                      {filterMatchedRow && (
-                                        <span className="ml-2 px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-semibold uppercase tracking-wide">
-                                          Filter
-                                        </span>
-                                      )}
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
                       </div>
                     ))}
                   </div>
@@ -685,22 +685,22 @@ const CompanyDetails = () => {
                           className={`bg-white border rounded-xl p-4 shadow-sm ${person.is_match ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/90' : 'border-[#E7E5E4]'}`}
                         >
                           <div className="flex justify-between items-center mb-3">
-                          <div className="flex items-center gap-2">
-                            <p className="text-base font-semibold text-[#1C1917]" style={{ fontFamily: "'Playfair Display', serif" }}>
-                              {person.employee_name || `Employee ${person.employee_id}`}
-                            </p>
-                            <a
-                              href={buildLinkedInSearchUrl(person.employee_name || `Employee ${person.employee_id}`, getTopCompanyNames(person.experience_history))}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              title={`Search ${(person.employee_name || `Employee ${person.employee_id}`)} on LinkedIn`}
-                              className="inline-flex items-center text-[#2563EB] hover:text-[#1D4ED8]"
-                            >
-                              <ExternalLink className="w-4 h-4" />
-                            </a>
-                            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-medium uppercase tracking-wider rounded-full">
-                              {person.connection_type === 'past_company_and_college' ? 'Company & College' : person.connection_type === 'past_company' ? 'Past company' : 'College'}
-                            </span>
+                            <div className="flex items-center gap-2">
+                              <p className="text-base font-semibold text-[#1C1917]" style={{ fontFamily: "'Playfair Display', serif" }}>
+                                {person.employee_name || `Employee ${person.employee_id}`}
+                              </p>
+                              <a
+                                href={buildLinkedInSearchUrl(person.employee_name || `Employee ${person.employee_id}`, getTopCompanyNames(person.experience_history))}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={`Search ${(person.employee_name || `Employee ${person.employee_id}`)} on LinkedIn`}
+                                className="inline-flex items-center text-[#2563EB] hover:text-[#1D4ED8]"
+                              >
+                                <ExternalLink className="w-4 h-4" />
+                              </a>
+                              <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-medium uppercase tracking-wider rounded-full">
+                                {person.connection_type === 'past_company_and_college' ? 'Company & College' : person.connection_type === 'past_company' ? 'Past company' : 'College'}
+                              </span>
                               {person.is_match && (
                                 <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-semibold uppercase tracking-wider rounded-full">
                                   Filter matched

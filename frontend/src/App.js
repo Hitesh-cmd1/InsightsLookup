@@ -1,6 +1,6 @@
 import React from 'react';
 import '@/App.css';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import LandingPage from './components/LandingPage';
 import Dashboard from './components/Dashboard';
 import CompanyDetails from './components/CompanyDetails';
@@ -21,6 +21,13 @@ function GlobalAuthModal() {
   );
 }
 
+function RequireAuth({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return null;
+  if (!user) return <Navigate to="/" replace />;
+  return children;
+}
+
 function App() {
   return (
     <div className="App">
@@ -30,9 +37,10 @@ function App() {
           <GlobalAuthModal />
           <Routes>
             <Route path="/" element={<LandingPage />} />
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/company-details" element={<CompanyDetails />} />
-            <Route path="/profile" element={<ProfilePage />} />
+            <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
+            <Route path="/company-details" element={<RequireAuth><CompanyDetails /></RequireAuth>} />
+            <Route path="/profile" element={<RequireAuth><ProfilePage /></RequireAuth>} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
       </AuthProvider>

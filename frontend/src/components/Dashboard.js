@@ -855,7 +855,7 @@ const Dashboard = () => {
   };
 
   useEffect(() => {
-    if (hasAutoShownTourRef.current || authLoading) return;
+    if (hasAutoShownTourRef.current || authLoading || !user) return;
     hasAutoShownTourRef.current = true;
     try {
       const seen = localStorage.getItem(DASHBOARD_TOUR_STORAGE_KEY);
@@ -863,7 +863,7 @@ const Dashboard = () => {
     } catch (_) { }
     setTourOpen(true);
     setTourStep(0);
-  }, [authLoading]);
+  }, [authLoading, user]);
 
   useEffect(() => {
     if (!tourOpen) return;

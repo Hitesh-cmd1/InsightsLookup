@@ -55,24 +55,24 @@ const ProfilePage = () => {
     setExperiences(
       profile.work_experiences && profile.work_experiences.length
         ? profile.work_experiences.map((exp) => ({
-            company: exp.company || '',
-            role: exp.role || '',
-            start_date: exp.start_date || '',
-            end_date: exp.end_date || '',
-            currently_working: !exp.end_date,
-          }))
+          company: exp.company || '',
+          role: exp.role || '',
+          start_date: exp.start_date || '',
+          end_date: exp.end_date || '',
+          currently_working: !exp.end_date,
+        }))
         : [emptyExperience()]
     );
 
     setEducations(
       profile.educations && profile.educations.length
         ? profile.educations.map((edu) => ({
-            college: edu.college || '',
-            degree: edu.degree || '',
-            start_date: edu.start_date || '',
-            end_date: edu.end_date || '',
-            currently_studying: !edu.end_date,
-          }))
+          college: edu.college || '',
+          degree: edu.degree || '',
+          start_date: edu.start_date || '',
+          end_date: edu.end_date || '',
+          currently_studying: !edu.end_date,
+        }))
         : [emptyEducation()]
     );
 
@@ -369,7 +369,7 @@ const ProfilePage = () => {
   return (
     <div className="min-h-screen bg-[#FAFAF9]">
       {/* Header */}
-      <header className="bg-white border-b border-[#E7E5E4]">
+      <header className="bg-white border-b border-[#E7E5E4] sticky top-0 z-50">
         <div className="max-w-[1600px] mx-auto px-6 py-4 flex items-center justify-between">
           <div
             className="flex items-center gap-2 cursor-pointer"
